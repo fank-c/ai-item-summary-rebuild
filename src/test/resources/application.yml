@@ -1,0 +1,6 @@
+spring:
+  ai:
+    model:
+      chat: none
+    openai:
+      api-key: ""
