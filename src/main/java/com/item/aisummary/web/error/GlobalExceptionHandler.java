@@ -1,6 +1,11 @@
 package com.item.aisummary.web.error;
 
 import com.item.aisummary.application.auth.AuthenticationRequiredException;
+import com.item.aisummary.application.file.port.ObjectStorageException;
+import com.item.aisummary.domain.file.FileNotFoundException;
+import com.item.aisummary.domain.file.FileValidationException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
 import com.item.aisummary.domain.user.UserNotFoundException;
 import com.item.aisummary.infrastructure.web.RequestIdFilter;
 import jakarta.servlet.http.HttpServletRequest;
@@ -31,6 +36,26 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest().body(problem);
     }
 
+    @ExceptionHandler(FileValidationException.class)
+    public ResponseEntity<ProblemDetail> fileValidation(FileValidationException exception, HttpServletRequest request) {
+        return response(HttpStatus.BAD_REQUEST, "FILE_VALIDATION_ERROR", "文件参数错误", exception.getMessage(), request);
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ProblemDetail> uploadTooLarge(MaxUploadSizeExceededException exception, HttpServletRequest request) {
+        return response(HttpStatus.CONTENT_TOO_LARGE, "FILE_SIZE_LIMIT_EXCEEDED", "文件超过大小限制", "上传请求超过大小限制", request);
+    }
+
+    @ExceptionHandler(MultipartException.class)
+    public ResponseEntity<ProblemDetail> multipart(MultipartException exception, HttpServletRequest request) {
+        return response(HttpStatus.BAD_REQUEST, "FILE_VALIDATION_ERROR", "文件参数错误", "上传请求格式不正确", request);
+    }
+
+    @ExceptionHandler(ObjectStorageException.class)
+    public ResponseEntity<ProblemDetail> objectStorage(ObjectStorageException exception, HttpServletRequest request) {
+        return response(HttpStatus.BAD_GATEWAY, "OBJECT_STORAGE_UNAVAILABLE", "对象存储不可用", "对象存储暂时不可用", request);
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ProblemDetail> argument(IllegalArgumentException exception, HttpServletRequest request) {
         return response(HttpStatus.BAD_REQUEST, "REQUEST_VALIDATION_ERROR", "请求参数错误", exception.getMessage(), request);
@@ -46,7 +71,7 @@ public class GlobalExceptionHandler {
         return response(HttpStatus.BAD_REQUEST, "REQUEST_BODY_INVALID", "请求体错误", "请求体格式不正确", request);
     }
 
-    @ExceptionHandler({UserNotFoundException.class, NoResourceFoundException.class})
+    @ExceptionHandler({UserNotFoundException.class, FileNotFoundException.class, NoResourceFoundException.class})
     public ResponseEntity<ProblemDetail> notFound(Exception exception, HttpServletRequest request) {
         return response(HttpStatus.NOT_FOUND, "RESOURCE_NOT_FOUND", "资源不存在", "请求资源不存在", request);
     }
@@ -54,6 +79,13 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AuthenticationRequiredException.class)
     public ResponseEntity<ProblemDetail> authentication(AuthenticationRequiredException exception, HttpServletRequest request) {
         return response(HttpStatus.UNAUTHORIZED, "AUTHENTICATION_REQUIRED", "需要身份", exception.getMessage(), request);
+    }
+
+    @ExceptionHandler(org.springframework.web.HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ProblemDetail> methodNotAllowed(org.springframework.web.HttpRequestMethodNotSupportedException exception,
+                                                        HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).headers(exception.getHeaders())
+            .body(problem(HttpStatus.METHOD_NOT_ALLOWED, "METHOD_NOT_ALLOWED", "请求方法不支持", "该路径不支持此请求方法", request));
     }
 
     @ExceptionHandler(Exception.class)

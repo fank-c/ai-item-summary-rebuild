@@ -1,0 +1,66 @@
+package com.item.aisummary.infrastructure.file.storage;
+
+import com.aliyun.oss.ClientBuilderConfiguration;
+import com.aliyun.oss.OSS;
+import com.aliyun.oss.OSSClientBuilder;
+import com.aliyun.oss.model.ObjectMetadata;
+import com.item.aisummary.application.file.port.ObjectStorageClient;
+import com.item.aisummary.application.file.port.ObjectStorageException;
+import com.item.aisummary.infrastructure.file.FileProperties;
+import java.io.FilterInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Date;
+import java.util.Map;
+
+/** OSS 四操作 SDK 适配；返回流关闭时连同 SDK 对象资源一起释放。 */
+public final class AliyunOssObjectStorageClient implements ObjectStorageClient, AutoCloseable {
+    private final OSS client;
+    public AliyunOssObjectStorageClient(OSS client) { this.client = client; }
+
+    public static AliyunOssObjectStorageClient create(FileProperties.Storage properties) {
+        var aliyun = properties.aliyun();
+        var config = new ClientBuilderConfiguration();
+        config.setConnectionTimeout(FileProperties.timeoutMillis(properties.connectTimeout()));
+        config.setConnectionRequestTimeout(FileProperties.timeoutMillis(properties.connectTimeout()));
+        config.setSocketTimeout(FileProperties.timeoutMillis(properties.readTimeout()));
+        config.setMaxErrorRetry(0);
+        return new AliyunOssObjectStorageClient(new OSSClientBuilder().build(aliyun.endpoint(), aliyun.accessKeyId(),
+            aliyun.accessKeySecret(), config));
+    }
+    @Override public void putObject(String bucket, String key, String mime, long size, String sha256, InputStream stream) {
+        var metadata = new ObjectMetadata();
+        metadata.setContentLength(size); metadata.setContentType(mime); metadata.setUserMetadata(Map.of("sha256", sha256));
+        try { client.putObject(bucket, key, stream, metadata); }
+        catch (Exception exception) { throw failure("上传", exception); }
+    }
+    @Override public InputStream openObject(String bucket, String key) {
+        try {
+            var object = client.getObject(bucket, key);
+            return new FilterInputStream(object.getObjectContent()) {
+                private boolean closed;
+                @Override public void close() throws IOException {
+                    if (!closed) {
+                        closed = true;
+                        // OSSObject.close 自身负责关闭内容流和底层响应。
+                        object.close();
+                    }
+                }
+            };
+        } catch (Exception exception) { throw failure("读取", exception); }
+    }
+    @Override public String presignGetObject(String bucket, String key, Duration expiration) {
+        try { return client.generatePresignedUrl(bucket, key, Date.from(Instant.now().plus(expiration))).toExternalForm(); }
+        catch (Exception exception) { throw failure("下载签名", exception); }
+    }
+    @Override public void deleteObject(String bucket, String key) {
+        try { client.deleteObject(bucket, key); }
+        catch (Exception exception) { throw failure("删除", exception); }
+    }
+    @Override public void close() { client.shutdown(); }
+    private static ObjectStorageException failure(String operation, Exception cause) {
+        return new ObjectStorageException("OSS 对象" + operation + "失败", cause);
+    }
+}

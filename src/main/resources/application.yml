@@ -10,6 +10,10 @@ spring:
     init:
       # Apply deploy/mysql/schema.sql manually to the selected database.
       mode: never
+  servlet:
+    multipart:
+      max-file-size: ${APP_FILE_MAX_SIZE:20MB}
+      max-request-size: ${APP_FILE_REQUEST_MAX_SIZE:20MB}
   ai:
     model:
       # Keep the base project runnable without an AI provider credential.
@@ -31,6 +35,30 @@ app:
       enabled: ${APP_AUTH_MOCK_ENABLED:true}
       user-id: ${APP_AUTH_MOCK_USER_ID:mock-user}
       username: ${APP_AUTH_MOCK_USERNAME:mock-user}
+  file:
+    upload:
+      max-size: ${APP_FILE_MAX_SIZE:20MB}
+      allowed-extensions: [txt, md, pdf, docx]
+    storage:
+      key-prefix: ${FILE_STORAGE_KEY_PREFIX:files}
+      download-url-expiration: ${FILE_STORAGE_DOWNLOAD_URL_EXPIRATION:15m}
+      connect-timeout: ${FILE_STORAGE_CONNECT_TIMEOUT:5s}
+      read-timeout: ${FILE_STORAGE_READ_TIMEOUT:60s}
+      write-timeout: ${FILE_STORAGE_WRITE_TIMEOUT:60s}
+      minio:
+        enabled: ${MINIO_ENABLED:false}
+        endpoint: ${MINIO_ENDPOINT:}
+        bucket: ${MINIO_BUCKET:}
+        region: ${MINIO_REGION:us-east-1}
+        access-key: ${MINIO_ACCESS_KEY:}
+        secret-key: ${MINIO_SECRET_KEY:}
+        path-style-access: ${MINIO_PATH_STYLE_ACCESS:true}
+      aliyun:
+        enabled: ${ALIYUN_OSS_ENABLED:false}
+        endpoint: ${ALIYUN_OSS_ENDPOINT:}
+        bucket: ${ALIYUN_OSS_BUCKET:}
+        access-key-id: ${ALIYUN_OSS_ACCESS_KEY_ID:}
+        access-key-secret: ${ALIYUN_OSS_ACCESS_KEY_SECRET:}
 
 server:
   port: ${SERVER_PORT:8080}
