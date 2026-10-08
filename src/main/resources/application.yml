@@ -1,6 +1,15 @@
 spring:
   application:
     name: ai-item-summary
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/ai_item_summary?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true}
+    username: ${DB_USERNAME:}
+    password: ${DB_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  sql:
+    init:
+      # Apply deploy/mysql/schema.sql manually to the selected database.
+      mode: never
   ai:
     model:
       # Keep the base project runnable without an AI provider credential.
@@ -10,6 +19,18 @@ spring:
       api-key: ${OPENAI_API_KEY:}
       chat:
         model: ${OPENAI_MODEL:gpt-5-mini}
+
+mybatis-plus:
+  configuration:
+    # Do not log SQL parameters: user writes include personal data and password hashes.
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+
+app:
+  auth:
+    mock:
+      enabled: ${APP_AUTH_MOCK_ENABLED:true}
+      user-id: ${APP_AUTH_MOCK_USER_ID:mock-user}
+      username: ${APP_AUTH_MOCK_USERNAME:mock-user}
 
 server:
   port: ${SERVER_PORT:8080}

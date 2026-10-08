@@ -1,0 +1,10 @@
+CREATE TABLE IF NOT EXISTS `user` (
+    id VARCHAR(32) NOT NULL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    email VARCHAR(254) NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    status INT NOT NULL DEFAULT 1,
+    deleted_at TIMESTAMP(6) NULL,
+    create_at TIMESTAMP(6) NOT NULL,
+    update_at TIMESTAMP(6) NOT NULL
+);

@@ -16,7 +16,7 @@
 
 每个功能都应说明学习目标、关键 Spring AI API、运行方式、输入输出和测试方式。优先保持实现简单、边界清晰，只有在功能确实需要时才引入数据库、向量数据库、鉴权或生产级治理能力。
 
-当前阶段只维护可启动的基础工程和健康检查。新增业务模块、数据库、鉴权或其他基础设施前，必须有明确的用户需求。
+当前阶段维护基础工程和用户模块：用户资料 CRUD、BCrypt 密码摘要、跨模块用户存在性查询、模拟请求身份及公共错误处理。用户模块已按明确需求接入 MySQL；真实登录、退出、角色权限、账户启停及其他业务模块不在本阶段范围。新增其他基础设施或业务前，必须有明确的用户需求。
 
 ## 技术基线
 
@@ -24,6 +24,9 @@
 - Spring Boot：4.1.1。
 - Spring AI：2.0.1。
 - 构建工具：Maven 3.9+。
+- 用户持久化：MySQL、MyBatis-Plus 3.5.17，使用 `mybatis-plus-spring-boot4-starter`。
+- 密码摘要：Spring Security Crypto 的 BCrypt；不接入完整 Security starter。
+- H2 仅用于自动测试；驱动、Crypto、Validation、H2 和测试库版本由 Spring Boot 管理。
 - 包名根路径：`com.item.aisummary`。
 - 依赖版本统一由 `pom.xml` 管理，Spring AI 依赖使用 `spring-ai-bom`。
 
@@ -43,22 +46,25 @@
 ```text
 src/main/java/com/item/aisummary/
 ├── AiItemSummaryApplication.java
-└── web/
-    └── HealthController.java
+├── web/
+│   ├── HealthController.java
+│   ├── user/          # CRUD、请求校验、六字段响应
+│   └── error/         # ProblemDetail 公共异常映射
+├── application/
+│   ├── user/          # 用户用例、port 和 reference 合同
+│   └── auth/          # 最小请求身份及缺少身份异常
+├── domain/
+│   └── user/          # 用户业务数据与文本规则，无框架依赖
+└── infrastructure/
+    ├── user/          # 服务装配、MyBatis 持久化、引用切换
+    ├── security/      # BCrypt 摘要适配
+    ├── auth/          # 请求属性上下文、模拟身份配置和拦截器
+    └── web/           # 请求标识过滤器
 
-src/main/resources/
-└── application.yml
-
-src/test/java/com/item/aisummary/
-├── AiItemSummaryApplicationTests.java
-└── web/
-    └── HealthControllerTest.java
-
-src/test/resources/
-└── application.yml
-
-docs/
-└── api.md
+src/main/resources/application.yml
+src/test/java/com/item/aisummary/     # 与生产包结构对应的行为测试
+src/test/resources/                 # 隔离 H2 配置及测试表结构
+deploy/mysql/schema.sql             # 正式用户表结构
 ```
 
 ### 工程组织原则
@@ -138,7 +144,7 @@ src/main/resources/
 - 使用构造器注入，不使用字段注入。
 - 类、方法和变量使用清晰的英文名称。
 - 简单且不可变的请求、响应对象优先使用 `record`。
-- API 路径使用 `/api` 前缀；新增业务接口优先使用 `/api/v1`。
+- API 路径使用 `/api` 前缀；新增业务接口优先使用 `/api/v1`。用户迁移接口明确保持 `/api/users`。
 - 配置项放在 `application.yml` 或配置类中，不把可变配置硬编码到业务代码。
 - 修改行为时优先先写测试，再写实现；测试必须验证可观察行为，不要只验证内部实现细节。
 - 保持 UTF-8 编码和现有文件格式。
@@ -168,14 +174,37 @@ OPENAI_MODEL=<model-name>
 - 不提交 `.env`、本地 IDE 配置和 `target/` 生成物。
 - 修改端口、模型开关或启动方式后，必须同步更新 README。
 
-### 基础工程环境变量
+## 用户模块约定
 
-| 变量 | 默认值 | 用途 |
-| --- | --- | --- |
-| `SERVER_PORT` | `8080` | HTTP 端口 |
-| `SPRING_AI_MODEL_CHAT` | `none` | 设为 `openai` 启用模型 |
-| `OPENAI_API_KEY` | 空 | 模型凭据，通过本地环境提供 |
-| `OPENAI_MODEL` | `gpt-5-mini` | 模型名称 |
+- 用户服务只依赖应用层 `UserRepository` 和 `PasswordHasher`；领域对象不含 MyBatis 注解，持久化实体只留在基础设施层。
+- 响应固定为 `id/name/email/status/createAt/updateAt`，不含密码、摘要或删除时间，不加成功包装。
+- HTTP 先校验名称、邮箱和声明的密码长度，服务随后裁剪普通文本。密码原样编码；创建必填，修改省略或 null 保留，空白拒绝。
+- HTTP 密码声明上限为 255 字符，新密码另限制为 72 个 UTF-8 字节，超限返回 400，不截断或预哈希。
+- 未删除状态由 `deleted_at IS NULL` 表示，独立于 status；查询和引用不按 status 过滤。删除使用数据库 `CURRENT_TIMESTAMP(6)`，不修改账户状态或关联资源。
+- 写入要求一行；维持先查询后写入的语义，不声称已有完整并发冲突治理。
+- 模拟身份只放在请求属性中，跳过 OPTIONS，只适用于 `/api/**`，结束后清理，不创建 Session、不解析凭据。
+- 用户引用模拟模式只接受配置用户且不查数据库；关闭模拟后查询未删除用户。
+- 用户 CRUD 当前不读取身份或执行权限判断，关闭模拟身份不会自动保护该接口。
+- 错误统一为 ProblemDetail，显式包含 type、title、status、detail、instance、code；请求标识可取得时带 requestId。字段 errors 只含 field/message；未知异常固定显示“服务器内部错误”。
+- 生产 schema 位于 `deploy/mysql/schema.sql`，手动执行，不自动初始化或修改旧数据。数据库连接与会话采用 UTC，DATETIME(6) 使用显式 UTC 类型处理器。
+- 历史数据导入属于单独步骤：保留 ID、摘要和删除状态，先确认历史 DATETIME 时区，不重新编码摘要。
+
+### 用户模块环境变量
+
+| 变量 | 默认值与规则 |
+| --- | --- |
+| `DB_URL` | `jdbc:mysql://localhost:3306/ai_item_summary?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true`；覆盖时保留 UTC 参数 |
+| `DB_USERNAME` | 空，运行前提供数据库账户 |
+| `DB_PASSWORD` | 空，本地环境提供，不写入仓库 |
+| `APP_AUTH_MOCK_ENABLED` | `true` |
+| `APP_AUTH_MOCK_USER_ID` | `mock-user` |
+| `APP_AUTH_MOCK_USERNAME` | `mock-user` |
+| `SERVER_PORT` | `8080` |
+| `USER_TEST_DB_URL` | 仅显式 MySQL 验收使用，无默认值；数据库名称必须以 `_test` 结尾并配置 UTC 参数 |
+| `USER_TEST_DB_USERNAME` | 仅显式 MySQL 验收使用，无默认值，需测试库建表与 CRUD 权限 |
+| `USER_TEST_DB_PASSWORD` | 仅显式 MySQL 验收使用，默认空，本地环境提供 |
+
+运行应用前配置 MySQL 并手动建表，再执行 `mvn spring-boot:run`；模型仍默认关闭。普通测试使用独立 H2，不要求运行时数据库或模型凭据。
 
 ## 测试与验证
 
@@ -195,7 +224,9 @@ mvn clean verify
 
 不能访问外部服务或缺少必要凭据时，说明验证边界，不要伪造成功结果。
 
-普通测试通过独立测试配置强制关闭模型并清空 API Key，不依赖外部数据库、Docker、模型服务或个人凭据。
+用户行为测试覆盖 HTTP、摘要、服务失败、真实 Mapper SQL、引用切换和请求身份。普通测试强制关闭模型并使用 H2，不依赖本机 MySQL、Docker 或个人凭据。
+
+显式真实 MySQL 验收：先配置上表中的 `USER_TEST_DB_*`，再运行 `mvn -Pmysql-it verify`。该 profile 执行正式 schema 和完整 HTTP CRUD，仅清理本次创建的测试记录。H2 验证不能被描述为 MySQL 验证。实际启动验证仍应请求 `GET /api/health`。
 
 ## 文档同步
 
