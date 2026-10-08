@@ -1,5 +1,6 @@
 package com.item.aisummary.application.file;
 
+import com.item.aisummary.application.auth.ActorUserIdRules;
 import com.item.aisummary.application.auth.AuthenticationRequiredException;
 import com.item.aisummary.application.file.port.*;
 import com.item.aisummary.domain.file.*;
@@ -30,9 +31,9 @@ public class FileService implements FileContentService {
         String name = FileRules.requireName(source.originalName(), policy.allowedExtensions());
         String mime = FileRules.normalizeMime(source.mime());
         var target = storage.resolve(storageType);
-        Digest digest = digest(source);
         Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
         String key = FileRules.objectKey(policy.keyPrefix(), name, now);
+        Digest digest = digest(source);
         try (InputStream stream = source.openStream()) {
             target.client().putObject(target.bucket(), key, mime, digest.size(), digest.sha256(), stream);
         } catch (IOException exception) {
@@ -95,6 +96,7 @@ public class FileService implements FileContentService {
 
     private static void requireActor(String actorUserId) {
         if (actorUserId == null || actorUserId.isBlank()) throw new AuthenticationRequiredException();
+        ActorUserIdRules.requireValid(actorUserId);
     }
 
     /** 必须按实际读取字节计数，不能相信声明的 multipart 长度。 */

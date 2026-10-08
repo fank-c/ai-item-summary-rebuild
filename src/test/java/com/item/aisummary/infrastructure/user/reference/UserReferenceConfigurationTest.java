@@ -36,6 +36,34 @@ class UserReferenceConfigurationTest {
     }
 
     @Test
+    void enabledMockModeAccepts64CodePointsAfterTrimmingAndRejects65() {
+        String supplementary = new String(Character.toChars(0x1F600));
+        for (String character : new String[] {"a", supplementary}) {
+            String accepted = character.repeat(64);
+            runner.withPropertyValues("app.auth.mock.user-id= " + accepted + " ").run(context -> {
+                assertThat(context).hasNotFailed().hasSingleBean(UserReferenceService.class);
+                assertThat(context.getBean(UserReferenceService.class).requireExisting(accepted).id()).isEqualTo(accepted);
+            });
+            runner.withPropertyValues("app.auth.mock.user-id=" + character.repeat(65))
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure()).hasRootCauseInstanceOf(IllegalArgumentException.class)
+                        .hasRootCauseMessage("用户 ID 长度不能超过 64 个字符");
+                });
+        }
+    }
+
+    @Test
+    void disabledMockModeAllowsUnusedOverlongIdentity() {
+        runner.withPropertyValues("app.auth.mock.enabled=false", "app.auth.mock.user-id=" + "a".repeat(65),
+                "app.auth.mock.username=")
+            .withBean(com.item.aisummary.application.user.UserService.class, () -> new com.item.aisummary.application.user.UserService(
+                org.mockito.Mockito.mock(com.item.aisummary.application.user.port.UserRepository.class),
+                org.mockito.Mockito.mock(com.item.aisummary.application.user.port.PasswordHasher.class), java.time.Clock.systemUTC()))
+            .run(context -> assertThat(context).hasNotFailed().hasSingleBean(UserReferenceService.class));
+    }
+
+    @Test
     void disabledMockModeUsesDatabaseUserQueryWithoutFilteringStatus() {
         com.item.aisummary.application.user.port.UserRepository repository = org.mockito.Mockito.mock(
             com.item.aisummary.application.user.port.UserRepository.class);

@@ -27,7 +27,7 @@ class UserFailureHttpTest {
     void zeroRowUpdatesAndDeletesReturnInternalError() throws Exception {
         Instant time = Instant.parse("2026-10-07T00:00:00Z");
         when(repository.findById("id")).thenReturn(Optional.of(new User("id", "Alice", "alice@example.test", "hash", 1, null, time, time)));
-        when(repository.update(any())).thenReturn(0);
+        when(repository.update(any(), anyBoolean())).thenReturn(0);
         when(repository.softDelete(eq("id"), any())).thenReturn(0);
         mvc.perform(put("/api/users/id").contentType("application/json")
                 .content("{\"name\":\"Bob\",\"email\":\"bob@example.test\"}"))

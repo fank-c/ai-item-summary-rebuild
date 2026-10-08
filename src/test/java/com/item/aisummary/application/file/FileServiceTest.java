@@ -88,7 +88,53 @@ class FileServiceTest {
             assertThatThrownBy(() -> service.requireOwnedProcessable(actor, "id")).isInstanceOf(AuthenticationRequiredException.class);
             assertThatThrownBy(() -> service.openForProcessing(actor, "id")).isInstanceOf(AuthenticationRequiredException.class);
         }
+        verifyNoInteractions(repository);
+        assertThat(storage.objects).isEmpty();
     }
+
+    @Test void overlongIdentityIsRejectedBeforeAnyDependencyAccess() {
+        ObjectStorageRouter router = mock(ObjectStorageRouter.class);
+        UploadSource input = mock(UploadSource.class);
+        FileService guarded = new FileService(repository, router,
+            new FilePolicy(4, Set.of("txt"), "files", Duration.ofMinutes(15)));
+        for (String actor : new String[] {"a".repeat(65), new String(Character.toChars(0x1F600)).repeat(65)}) {
+            assertThatIllegalArgumentException().isThrownBy(() -> guarded.upload(actor, "minio", input))
+                .withMessage("用户 ID 长度不能超过 64 个字符");
+            assertThatIllegalArgumentException().isThrownBy(() -> guarded.createDownloadUrl(actor, "id"));
+            assertThatIllegalArgumentException().isThrownBy(() -> guarded.delete(actor, "id"));
+            assertThatIllegalArgumentException().isThrownBy(() -> guarded.requireOwnedProcessable(actor, "id"));
+            assertThatIllegalArgumentException().isThrownBy(() -> guarded.openForProcessing(actor, "id"));
+        }
+        verifyNoInteractions(repository, router, input);
+    }
+
+    @Test void valid64CodePointIdentityIsSavedExactlyAsSupplied() {
+        when(repository.insert(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        for (String actor : new String[] {"a".repeat(64), new String(Character.toChars(0x1F600)).repeat(64), " " + "A".repeat(62) + " "}) {
+            AtomicInteger closes = new AtomicInteger();
+            var file = service.upload(actor, "minio", source(1, "abc", closes));
+            assertThat(file.createBy()).isEqualTo(actor);
+            assertThat(file.updateBy()).isEqualTo(actor);
+            assertThat(closes.get()).isEqualTo(2);
+        }
+        verify(repository, never()).findById(any());
+    }
+
+    @Test void invalidKeyIsRejectedBeforeOpeningSourceOrWritingContent() throws IOException {
+        UploadSource input = mock(UploadSource.class);
+        when(input.declaredSize()).thenReturn(1L);
+        when(input.originalName()).thenReturn("文".repeat(251) + ".txt");
+        when(input.mime()).thenReturn("text/plain");
+        FileService guarded = new FileService(repository, storage,
+            new FilePolicy(4, Set.of("txt"), "中".repeat(150), Duration.ofMinutes(15)));
+
+        assertThatThrownBy(() -> guarded.upload("owner", "minio", input)).isInstanceOf(FileValidationException.class)
+            .hasMessage("对象 Key 的 UTF-8 长度不能超过 1023 字节");
+        verify(input, never()).openStream();
+        verifyNoInteractions(repository);
+        assertThat(storage.objects).isEmpty();
+    }
+
     private static UploadSource source(long declared, String text, AtomicInteger closes) {
         return new UploadSource() {
             public String originalName() { return "a.txt"; }

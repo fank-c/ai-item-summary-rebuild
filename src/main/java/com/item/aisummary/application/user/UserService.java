@@ -43,9 +43,10 @@ public final class UserService {
         User existing = findExisting(id);
         String name = User.requireText(command.name(), "name");
         String email = User.requireText(command.email(), "email");
-        String hash = command.password() == null ? existing.passwordHash() : hasher.encode(command.password());
+        boolean passwordChanged = command.password() != null;
+        String hash = passwordChanged ? hasher.encode(command.password()) : existing.passwordHash();
         User updated = new User(existing.id(), name, email, hash, existing.status(), null, existing.createAt(), now());
-        requireOneRow(repository.update(updated));
+        requireOneRow(repository.update(updated, passwordChanged));
         return UserProfile.from(updated);
     }
 

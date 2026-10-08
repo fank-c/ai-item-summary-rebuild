@@ -11,7 +11,8 @@ public interface UserRepository {
     User insert(User user);
     Optional<User> findById(String id);
     List<User> findAll();
-    int update(User user);
+    /** 仅更新资料和更新时间；passwordChanged=false 时不写 password 列。 */
+    int update(User user, boolean passwordChanged);
     /** 删除时间由数据库生成，更新时间由调用方提供，不改变账户 status。 */
     int softDelete(String id, Instant updateAt);
 }

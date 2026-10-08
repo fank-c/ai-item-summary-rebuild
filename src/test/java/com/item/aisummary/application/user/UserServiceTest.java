@@ -53,10 +53,38 @@ class UserServiceTest {
     @ValueSource(ints = {0, 2})
     void refusesUnexpectedUpdateOrDeleteRowCounts(int rows) {
         when(repository.findById("id")).thenReturn(Optional.of(user(null)));
-        when(repository.update(any())).thenReturn(rows);
+        when(repository.update(any(), anyBoolean())).thenReturn(rows);
         when(repository.softDelete(eq("id"), any())).thenReturn(rows);
         assertThatIllegalStateException().isThrownBy(() -> service.update("id", new SaveUserCommand("Bob", "bob@example.test", null)));
         assertThatIllegalStateException().isThrownBy(() -> service.delete("id"));
+    }
+
+    @Test
+    void profileUpdateWithoutPasswordLeavesPasswordUnchangedInRepositoryContract() {
+        when(repository.findById("id")).thenReturn(Optional.of(user(null)));
+        when(repository.update(any(), anyBoolean())).thenReturn(1);
+
+        UserProfile profile = service.update("id", new SaveUserCommand(" Bob ", " bob@example.test ", null));
+        var capture = org.mockito.ArgumentCaptor.forClass(User.class);
+        verify(repository).update(capture.capture(), eq(false));
+        assertThat(capture.getValue().passwordHash()).isEqualTo("existing-hash");
+        assertThat(profile.name()).isEqualTo("Bob");
+        assertThat(profile.email()).isEqualTo("bob@example.test");
+        assertThat(profile.updateAt()).isEqualTo(TIME);
+    }
+
+    @Test
+    void explicitPasswordUpdatePassesNewUntrimmedBcryptHash() {
+        when(repository.findById("id")).thenReturn(Optional.of(user(null)));
+        when(repository.update(any(), anyBoolean())).thenReturn(1);
+
+        service.update("id", new SaveUserCommand("Bob", "bob@example.test", " new secret "));
+        var capture = org.mockito.ArgumentCaptor.forClass(User.class);
+        verify(repository).update(capture.capture(), eq(true));
+        String hash = capture.getValue().passwordHash();
+        var bcrypt = new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder();
+        assertThat(bcrypt.matches(" new secret ", hash)).isTrue();
+        assertThat(bcrypt.matches("new secret", hash)).isFalse();
     }
 
     @ParameterizedTest

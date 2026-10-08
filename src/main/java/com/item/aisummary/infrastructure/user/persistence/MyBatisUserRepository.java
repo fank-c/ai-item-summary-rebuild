@@ -37,8 +37,16 @@ public class MyBatisUserRepository implements UserRepository {
     }
 
     @Override
-    public int update(User user) {
-        return mapper.updateById(toEntity(user));
+    public int update(User user, boolean passwordChanged) {
+        UpdateWrapper<UserEntity> update = new UpdateWrapper<UserEntity>()
+            .eq("id", user.id()).isNull("deleted_at")
+            .set("name", user.name())
+            .set("email", user.email())
+            .set("update_at", user.updateAt(), "typeHandler=" + UtcInstantTypeHandler.class.getName());
+        if (passwordChanged) {
+            update.set("password", user.passwordHash());
+        }
+        return mapper.update(null, update);
     }
 
     @Override

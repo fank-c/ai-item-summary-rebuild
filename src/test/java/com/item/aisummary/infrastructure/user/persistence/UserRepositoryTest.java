@@ -47,7 +47,48 @@ class UserRepositoryTest {
         assertThat(jdbc.queryForObject("SELECT update_at FROM `user` WHERE id=?", LocalDateTime.class, inserted.id()))
             .isEqualTo(LocalDateTime.parse("2026-01-03T04:05:06.654321"));
         assertThat(repository.softDelete(inserted.id(), UPDATED)).isZero();
-        assertThat(repository.update(inserted)).isZero();
+        assertThat(repository.update(inserted, false)).isZero();
+        assertThat(repository.update(inserted, true)).isZero();
+    }
+
+    @Test
+    void staleProfileUpdateDoesNotRestorePreviousPassword() {
+        User snapshot = repository.insert(new User(null, "Alice", "alice@example.test", "old-hash", 7, null, CREATED, CREATED));
+        jdbc.update("UPDATE `user` SET password=? WHERE id=?", "new-hash", snapshot.id());
+
+        User profileUpdate = new User(snapshot.id(), "Bob", "bob@example.test", snapshot.passwordHash(),
+            snapshot.status(), null, snapshot.createAt(), UPDATED);
+        assertThat(repository.update(profileUpdate, false)).isEqualTo(1);
+
+        User stored = repository.findById(snapshot.id()).orElseThrow();
+        assertThat(stored.passwordHash()).isEqualTo("new-hash");
+        assertThat(stored.name()).isEqualTo("Bob");
+        assertThat(stored.email()).isEqualTo("bob@example.test");
+        assertThat(stored.status()).isEqualTo(7);
+        assertThat(stored.createAt()).isEqualTo(CREATED);
+        assertThat(stored.updateAt()).isEqualTo(UPDATED);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void updatesOnlyMutableFieldsAndOptionalPassword(boolean passwordChanged) {
+        User snapshot = repository.insert(new User(null, "Alice", "alice@example.test", "old-hash", 7, null, CREATED, CREATED));
+        LocalDateTime concurrentCreated = LocalDateTime.parse("2026-01-01T00:00:00.111111");
+        jdbc.update("UPDATE `user` SET status=?, create_at=? WHERE id=?", 9, concurrentCreated, snapshot.id());
+
+        User update = new User(snapshot.id(), "Bob", "bob@example.test", "new-hash", snapshot.status(),
+            null, snapshot.createAt(), UPDATED);
+        assertThat(repository.update(update, passwordChanged)).isEqualTo(1);
+
+        User stored = repository.findById(snapshot.id()).orElseThrow();
+        assertThat(stored.id()).isEqualTo(snapshot.id());
+        assertThat(stored.name()).isEqualTo("Bob");
+        assertThat(stored.email()).isEqualTo("bob@example.test");
+        assertThat(stored.passwordHash()).isEqualTo(passwordChanged ? "new-hash" : "old-hash");
+        assertThat(stored.status()).isEqualTo(9);
+        assertThat(stored.createAt()).isEqualTo(Instant.parse("2026-01-01T00:00:00.111111Z"));
+        assertThat(stored.updateAt()).isEqualTo(UPDATED);
+        assertThat(stored.deletedAt()).isNull();
     }
 
     @ParameterizedTest

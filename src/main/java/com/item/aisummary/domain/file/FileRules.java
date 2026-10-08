@@ -1,5 +1,6 @@
 package com.item.aisummary.domain.file;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -9,6 +10,7 @@ import java.util.UUID;
 
 /** 文件输入文本规则；只约束名称和 MIME，不识别实际内容格式。 */
 public final class FileRules {
+    private static final int MAX_OBJECT_KEY_UTF8_BYTES = 1023;
     private static final DateTimeFormatter UTC_DATE = DateTimeFormatter.ofPattern("yyyy/MM/dd").withZone(ZoneOffset.UTC);
     private FileRules() { }
 
@@ -37,6 +39,9 @@ public final class FileRules {
         if (filename.isBlank()) filename = "file";
         String key = prefix + "/" + UTC_DATE.format(now) + "/" + UUID.randomUUID() + "-" + filename;
         if (key.length() > 512) throw new FileValidationException("对象 Key 超过长度限制");
+        if (key.getBytes(StandardCharsets.UTF_8).length > MAX_OBJECT_KEY_UTF8_BYTES) {
+            throw new FileValidationException("对象 Key 的 UTF-8 长度不能超过 1023 字节");
+        }
         return key;
     }
 
