@@ -1,6 +1,9 @@
 spring:
   application:
     name: ai-item-summary
+  config:
+    # Local overrides in the process working directory; absent files are allowed.
+    import: "optional:file:./.env[.properties][encoding=utf-8]"
   datasource:
     url: ${DB_URL:jdbc:mysql://localhost:3306/ai_item_summary?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true}
     username: ${DB_USERNAME:}

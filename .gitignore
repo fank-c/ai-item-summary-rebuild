@@ -18,3 +18,7 @@ target/
 ### Local environment ###
 .env
 .env.*
+!.env.example
+
+### Temporary plans ###
+/.work/plans/
