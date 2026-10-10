@@ -5,7 +5,11 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
-/** 知识库持久化能力。 */
+/**
+ * 知识库（KnowledgeBase）元数据持久化能力端口。
+ *
+ * <p>负责知识库元数据在 MySQL 中的新增、按 ID 查询、全量列表查询与重命名更新。
+ */
 public interface KnowledgeBaseRepository {
     /**
      * 插入新的知识库元数据。

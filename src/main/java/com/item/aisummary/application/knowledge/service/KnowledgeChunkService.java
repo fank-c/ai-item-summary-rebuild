@@ -18,7 +18,11 @@ import java.util.UUID;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
-/** 只保存调用方提供的片段，不读取文件或执行解析、切片与向量化。 */
+/**
+ * 知识片段（Chunk）管理应用服务。
+ *
+ * <p>负责批次片段的校验与持久化，并在事务内维护所属版本的累计片段计数。
+ */
 public class KnowledgeChunkService {
     private final KnowledgeRevisionRepository revisions;
     private final KnowledgeChunkRepository chunks;
@@ -32,25 +36,11 @@ public class KnowledgeChunkService {
     }
 
     /**
-     * 向指定 building 版本追加一批调用方已经准备好的片段。
+     * 向处于 building 状态的版本批量追加保存片段，并原子更新版本累计片段数。
      *
-     * <p>先校验版本 ID 和非空批次，在构造每项片段时校验完整字段、生成新 ID、固定版本归属， 使用同一个微秒时间。所有输入验证均发生在数据库写入前；随后锁住目标版本， 确认仍为
-     * building，再按输入顺序逐项插入，不修改既有片段正文。
-     *
-     * <p>插入后读取该版本实际总数，包含以前成功追加的批次，再更新 chunkCount。 版本行锁、插入和计数更新处于同一个 READ_COMMITTED 事务中，运行时失败回滚整批。
-     * 同版本并发批次在行锁下串行执行；已存序号竞争由唯一约束报告，不重试。
-     *
-     * <p>必须通过 Spring 注入的服务调用，直接 new 或绕过代理不会获得该事务边界。 加入外层事务时，基础设施检查实际隔离级别；不兼容时写入前失败，兼容外层事务
-     * 的回滚同样回滚本批次。本用例不解析文件、不切片、不计算 Token 或向量。
-     *
-     * @param revisionId 目标版本 ID，裁剪后非空白且最多 32 个 Java 字符
-     * @param commands 非空片段批次，不含空项，批内序号唯一，不接受调用方指定片段 ID 或版本归属
-     * @return 按输入顺序返回的已保存片段，不可修改，正文保持原样
-     * @throws IllegalArgumentException ID、批次、正文、序号、Token、偏移或页码不合法
-     * @throws KnowledgeNotFoundException 目标版本不存在
-     * @throws KnowledgeConflictException 版本不是 building，或与已存片段序号冲突
-     * @throws IllegalStateException 实际事务隔离级别不兼容，或仓储写入行数不符合合同
-     * @throws ArithmeticException 实际总片段数超过 int 范围
+     * @param revisionId 目标版本 ID
+     * @param commands 待追加的片段命令列表（批内序号唯一）
+     * @return 保存成功的片段实体列表
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public List<KnowledgeChunk> saveBatch(
@@ -82,14 +72,14 @@ public class KnowledgeChunkService {
     }
 
     /**
-     * 查询单个已保存片段，不展开所属版本或源文件。
+     * 根据片段 ID 查询单个已持久化的知识片段详情。
      *
-     * <p>先校验并裁剪片段 ID，再从仓储取得正文、标题及位置快照。 未找到时抛内部资源异常，不返回 null，也不重新推算未知位置或 Token 数。
+     * <p>仅查询片段元数据快照，不展开所属版本或源文件，未知位置或 Token 计数值保持为 null。
      *
-     * @param id 片段 ID，裁剪后非空白且最多 32 个 Java 字符
-     * @return 已保存的片段快照
-     * @throws IllegalArgumentException ID 不符合文本规则
-     * @throws KnowledgeNotFoundException 片段不存在
+     * @param id 片段唯一标识（32 位 UUID）
+     * @return 匹配的知识片段实体
+     * @throws IllegalArgumentException 当片段 ID 为空或格式非法时抛出
+     * @throws KnowledgeNotFoundException 当对应片段记录不存在时抛出
      */
     public KnowledgeChunk findById(String id) {
         return chunks.findById(KnowledgeRules.requireId(id, "片段 ID"))
@@ -97,14 +87,14 @@ public class KnowledgeChunkService {
     }
 
     /**
-     * 查询指定版本的全部片段，由仓储按 sequenceNo 升序返回。
+     * 查询指定版本下的全部知识片段列表。
      *
-     * <p>先确认规范化后的版本 ID 对应真实记录，再查询片段。 不要求版本仍为 building，不按活动版本过滤，不读取文件或操作向量。
+     * <p>查询前校验版本存在性；返回列表固定按 {@code sequence_no}（片段序号）升序排序。
      *
-     * @param revisionId 版本 ID，查询前裁剪首尾空白
-     * @return 升序片段列表；有效版本没有片段时为空列表
-     * @throws IllegalArgumentException 版本 ID 不符合文本规则
-     * @throws KnowledgeNotFoundException 版本不存在
+     * @param revisionId 目标版本唯一标识（32 位 UUID）
+     * @return 升序排序的知识片段列表；若该版本尚无片段则返回空列表
+     * @throws IllegalArgumentException 当版本 ID 为空或格式非法时抛出
+     * @throws KnowledgeNotFoundException 当指定版本不存在时抛出
      */
     public List<KnowledgeChunk> findByRevisionId(String revisionId) {
         String id = KnowledgeRules.requireId(revisionId, "版本 ID");
@@ -113,12 +103,11 @@ public class KnowledgeChunkService {
     }
 
     /**
-     * 校验批次容器并复制为不可修改的输入快照，避免继续使用调用者的可变列表。
+     * 校验批次命令容器合法性，并防御性复制为不可修改列表。
      *
-     * <p>拒绝 null、空批次及空命令项；本步骤仅检查容器，不进行数据库访问。 序号唯一性与逐项领域字段检查在 prepareChunks 中完成，仍先于任何插入。
-     *
-     * @return 保留输入顺序的不可修改命令列表
-     * @throws IllegalArgumentException 批次为空或包含空项
+     * @param commands 待校验的批次命令列表
+     * @return 不可修改的命令列表快照
+     * @throws IllegalArgumentException 当批次为 null、为空列表或包含 null 元素时抛出
      */
     private static List<SaveKnowledgeChunkCommand> validateCommands(
             List<SaveKnowledgeChunkCommand> commands) {
@@ -132,15 +121,15 @@ public class KnowledgeChunkService {
     }
 
     /**
-     * 将完整批次转换为新片段，在取得版本锁前完成所有可本地验证的字段检查。
+     * 将命令批次转换为领域实体列表，并在内存中完成序号去重与字段合法性校验。
      *
-     * <p>拒绝批内重复序号；每项使用新生成的 32 位 UUID、入口确定的 revisionId 和共享时间。 KnowledgeChunk 构造器检查非负序号、非空白正文、Token
-     * 与成组位置约束， 并保存标题列表快照。正文和未知位置保留原样，不计算或虚构元数据。
+     * <p>在获取数据库锁之前提前拦截批内重复序号等非法输入，降低数据库锁持有竞争。
      *
-     * <p>本步骤不访问仓储，任何项非法都会终止整批准备；与已存序号的冲突留给插入时 的数据库唯一约束处理，不用先查后写替代该约束。
-     *
-     * @return 按命令顺序准备的新片段列表，仅供本次保存流程使用
-     * @throws IllegalArgumentException 批内序号重复或某项不满足领域字段规则
+     * @param revisionId 所属版本 ID
+     * @param commands 命令列表快照
+     * @param now 当前统一微秒时间戳
+     * @return 预组装完成的知识片段实体列表
+     * @throws IllegalArgumentException 当批次内存在重复序号或单项字段不符合约束时抛出
      */
     private static List<KnowledgeChunk> prepareChunks(
             String revisionId, List<SaveKnowledgeChunkCommand> commands, Instant now) {

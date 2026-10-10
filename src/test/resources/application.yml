@@ -11,9 +11,15 @@ spring:
   ai:
     model:
       chat: none
+      embedding: none
+    vectorstore:
+      type: none
     openai:
       api-key: ""
 app:
+  knowledge:
+    rag:
+      enabled: false
   file:
     storage:
       minio:

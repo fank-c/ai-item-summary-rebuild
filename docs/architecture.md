@@ -21,7 +21,7 @@ web ───────────────→ application ─────
 | `web` | Controller、请求校验、响应字段映射、HTTP 异常处理 | 不直接操作数据库或 SDK，不承载业务规则 |
 | `application` | 用户、文件与知识库用例、请求身份、跨模块引用及外部能力 port | 通过接口调用仓储、密码摘要或对象存储，不依赖其实现 |
 | `domain` | 用户数据与文本规则、文件归属、知识库记录与片段位置规则 | 不依赖 Spring、MyBatis 或供应商 SDK |
-| `infrastructure` | 构造器装配、MyBatis、BCrypt、模拟身份、存储 SDK | 实现应用接口，处理外部协议、生命周期与异常转换 |
+| `infrastructure` | 构造器装配、MyBatis、BCrypt、模拟身份、存储 SDK 与知识库 Spring AI Reader/Splitter/Qdrant | 实现应用接口，处理外部协议、生命周期与异常转换 |
 
 `port` 是应用定义的外部能力接口。例：用户服务只认识 `PasswordHasher`，BCrypt 的具体编码器留在基础设施；文件服务只认识 `UploadSource`，MultipartFile 留在 Web 层。
 
@@ -38,7 +38,7 @@ web ───────────────→ application ─────
 | `web.health`、`web.error` | 保持单一职责 | 健康检查与公共异常转换 |
 | `application.user` | `service`、`command`、`result`、`port`、`reference` | 用户用例、输入输出、外部能力及用户引用合同 |
 | `application.file` | `service`、`content`、`policy`、`result`、`port` | 文件用例、内容读取合同、约束和外部能力 |
-| `application.knowledge` | `service`、`command`、`port` | 四个用例、片段批次输入及四个仓储接口 |
+| `application.knowledge` | `service`、`command`、`result`、`port`、`exception` | 基础与入库用例、片段与索引输入、构建结果、仓储与处理接口 |
 | `domain.user` | `model`、`exception` | 用户数据和未找到异常 |
 | `domain.file` | `model`、`rule`、`exception` | 文件数据、文本规则与业务异常 |
 | `domain.knowledge` | `model`、`value`、`enums`、`rule`、`exception` | 四表记录、标题、状态、输入规则与异常 |
@@ -50,8 +50,8 @@ web ───────────────→ application ─────
 
 ```text
 infrastructure/knowledge/
-├── config/
-│   └── KnowledgeConfiguration.java
+├── config/            # 基础装配、RAG 条件装配与参数
+├── ai/                # Reader/Splitter、向量适配与唯一切分器
 └── persistence/
     ├── entity/        # 四表数据库实体
     ├── mapper/        # 四个 Mapper，封装 SQL 入口
@@ -92,7 +92,9 @@ infrastructure/knowledge/
 
 知识文档登记通过 `FileContentService.requireOwnedProcessable` 检查源文件元数据及归属，不读取正文。关联存在性由应用服务检查，三组联合唯一约束由数据库兜底。版本号采用 MAX + 1，竞争冲突明确失败。
 
-片段批次是知识库唯一需要多次写入的用例。`KnowledgeChunkService.saveBatch` 使用 Spring 事务与 READ_COMMITTED 隔离级别，锁定版本后插入并更新实际总数；失败整批回滚，同版本并发追加串行执行。服务没有构建或发布步骤，也不修改文档活动版本。
+片段批次与版本生命周期分别使用短事务。`KnowledgeChunkService.saveBatch` 使用 Spring 事务与 READ_COMMITTED 隔离级别，锁定版本后插入并更新实际总数；失败整批回滚，同版本并发追加串行执行。`KnowledgeBuildLifecycleService` 创建构建时锁文档防止重复 building，发布时在同一事务中更新 ready、活动指针和旧版本 superseded。
+
+`KnowledgeIndexBuildService.build` 拒绝外层事务；文件读取、Embedding、Qdrant 和旧向量清理均在数据库事务外执行。数据库与 Qdrant 没有共同回滚，失败或旧向量清理也不能替代后续检索的活动版本过滤。
 
 MySQL 的 `DATETIME(6)` 不保存时区。[UtcInstantTypeHandler](../src/main/java/com/item/aisummary/infrastructure/persistence/typehandler/UtcInstantTypeHandler.java) 显式按 UTC 在数据库时间与 `Instant` 之间转换。连接与会话也必须使用 UTC，历史时间不能未经确认直接解释为 UTC。
 
@@ -100,8 +102,8 @@ MySQL 的 `DATETIME(6)` 不保存时区。[UtcInstantTypeHandler](../src/main/ja
 
 模型和存储默认关闭；普通测试使用 H2、Mock 或内存存储替身。健康接口不探测这些外部服务。
 
-Spring AI 通过 OpenAI starter 接入，但当前没有业务模型调用。后续 AI 功能仍通过应用 port 暴露所需能力，Spring AI API 与 Prompt 加载留在基础设施；可复用 Prompt 放在 `src/main/resources/prompts/`。
+Spring AI 通过 OpenAI 与 Qdrant starter 接入。txt/md 入库使用 `TextReader`、`MarkdownDocumentReader`、`TokenTextSplitter` 和 `QdrantVectorStore`，应用只依赖自己的 `KnowledgeContentProcessor`、`KnowledgeVectorIndex`。默认 Embedding 与向量存储类型均为 none，RAG 构建关闭。启用后才装配构建入口和外部适配；不使用 SimpleVectorStore。
 
-当前没有真实登录、退出、角色权限、账户启停、客户端直传、跨数据库与对象存储的自动补偿、完整并发治理或 RAG 处理。知识库基础持久化已实现，知识库权限、构建任务、版本发布、文件解析和检索仍按后续需求加入。
+当前没有真实登录、退出、角色权限、账户启停、客户端直传、跨系统自动补偿、完整并发治理、PDF/DOCX/OCR 入库、异步任务、检索或问答。知识库基础持久化和 txt/md 同步入库、版本发布已实现；后续能力仍按明确需求加入。
 
 开发约定与同步要求见 [AGENTS.md](../AGENTS.md)，构建和验证边界见 [测试说明](./guides/testing.md)。

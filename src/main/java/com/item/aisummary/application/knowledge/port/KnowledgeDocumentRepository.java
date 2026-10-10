@@ -1,6 +1,9 @@
 package com.item.aisummary.application.knowledge.port;
 
+import com.item.aisummary.domain.knowledge.enums.DocumentIndexStatus;
 import com.item.aisummary.domain.knowledge.model.KnowledgeDocument;
+
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -23,6 +26,35 @@ public interface KnowledgeDocumentRepository {
      * @return 包含文档的 Optional，不存在时为空
      */
     Optional<KnowledgeDocument> findById(String id);
+
+    /**
+     * 在数据库事务内使用排他锁（FOR UPDATE）查询指定知识文档。
+     *
+     * <p>同文档的构建创建、失败记录和版本发布等生命周期操作必须先取得此锁，以避免并发修改。
+     *
+     * @param id 文档唯一标识（32 位 UUID）
+     * @return 包含已加锁文档实体的 Optional，不存在时为空
+     */
+    Optional<KnowledgeDocument> findByIdForUpdate(String id);
+
+    /**
+     * 更新知识文档的活动版本指针与索引状态（发布成功或构建失败）。
+     *
+     * @param id 文档 ID
+     * @param activeRevisionId 新的活动版本 ID
+     * @param status 更新后的索引状态
+     * @param failureCode 业务失败码（成功发布时为 null）
+     * @param failureMessage 失败原因摘要（成功发布时为 null）
+     * @param updateAt 更新时刻微秒时间戳
+     * @return 影响行数（预期为 1）
+     */
+    int updateIndexState(
+            String id,
+            String activeRevisionId,
+            DocumentIndexStatus status,
+            String failureCode,
+            String failureMessage,
+            Instant updateAt);
 
     /**
      * 根据知识库 ID 和源文件 ID 查询登记记录。

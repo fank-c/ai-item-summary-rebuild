@@ -12,11 +12,20 @@ import java.util.List;
 import java.util.Optional;
 import org.springframework.stereotype.Repository;
 
-/** 知识库表的 MyBatis 持久化适配器。 */
+/**
+ * 知识库表（knowledge_base）的 MyBatis 持久化适配器实现类。
+ *
+ * <p>实现应用层端口 {@link KnowledgeBaseRepository}，负责领域实体与数据库实体 {@link KnowledgeBaseEntity} 之间的相互转换。
+ */
 @Repository
 public class MyBatisKnowledgeBaseRepository implements KnowledgeBaseRepository {
     private final KnowledgeBaseMapper mapper;
 
+    /**
+     * 创建知识库 MyBatis 仓储适配器。
+     *
+     * @param mapper MyBatis-Plus 知识库 Mapper
+     */
     public MyBatisKnowledgeBaseRepository(KnowledgeBaseMapper mapper) {
         this.mapper = mapper;
     }

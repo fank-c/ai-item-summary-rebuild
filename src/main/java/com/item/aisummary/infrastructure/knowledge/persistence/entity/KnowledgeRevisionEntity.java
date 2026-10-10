@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.item.aisummary.infrastructure.persistence.typehandler.UtcInstantTypeHandler;
+
 import java.time.Instant;
 
 /** knowledge_document_revision 表映射；该表使用 created_at，而不是 create_at。 */
@@ -54,7 +55,7 @@ public final class KnowledgeRevisionEntity {
     @TableField(value = "published_at", typeHandler = UtcInstantTypeHandler.class)
     public Instant publishedAt;
 
-    /** 派生片段和向量清理完成时间；未清理时为空。 */
+    /** 向量清理完成时间；本阶段保留数据库片段。 */
     @TableField(value = "cleaned_at", typeHandler = UtcInstantTypeHandler.class)
     public Instant cleanedAt;
 }

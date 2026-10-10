@@ -4,7 +4,11 @@ import com.item.aisummary.domain.knowledge.model.KnowledgeChunk;
 import java.util.List;
 import java.util.Optional;
 
-/** 知识片段持久化能力。 */
+/**
+ * 知识片段（KnowledgeChunk）持久化能力端口。
+ *
+ * <p>负责知识片段在 MySQL 中的单条插入、按 ID 查询、按版本升序列表查询及实际片段总数统计。
+ */
 public interface KnowledgeChunkRepository {
     /**
      * 插入单个知识片段记录。

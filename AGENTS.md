@@ -16,7 +16,7 @@
 
 每个功能都应说明学习目标、关键 Spring AI API、运行方式、输入输出和测试方式。优先保持实现简单、边界清晰，只有在功能确实需要时才引入数据库、向量数据库、鉴权或生产级治理能力。
 
-当前阶段维护基础工程、用户、核心文件和知识库基础模块：用户资料 CRUD、BCrypt 密码摘要、跨模块用户存在性查询、模拟请求身份、公共错误处理，文件服务端上传、下载签名、删除和内部原始内容读取，以及知识库四表持久化和最小内部应用服务。用户、文件及知识库元数据使用 MySQL；文件存储可选 MinIO 或阿里云 OSS。真实登录、退出、角色权限、账户启停、客户端直传、可用性框架、知识库 HTTP/权限/版本发布和 RAG 处理不在本阶段范围。新增其他基础设施或业务前，必须有明确的用户需求。
+当前阶段维护基础工程、用户、核心文件、知识库基础服务和 txt/md 同步 RAG 入库：用户资料 CRUD、BCrypt 密码摘要、跨模块用户存在性查询、模拟请求身份、公共错误处理，文件上传、下载签名、删除、内部内容读取，以及知识库四表、Spring AI Reader/Splitter、OpenAI Embedding、Qdrant 索引与版本发布。元数据使用 MySQL；文件存储可选 MinIO 或阿里云 OSS。真实登录、权限、账户启停、客户端直传、可用性框架、知识库 HTTP、PDF/DOCX/OCR 入库、异步任务、检索和问答不在本阶段范围。新增其他基础设施或业务前，必须有明确的用户需求。
 
 ## 技术基线
 
@@ -55,7 +55,7 @@ src/main/java/com/item/aisummary/
 ├── application/
 │   ├── user/          # service、command、result、port、reference
 │   ├── file/          # service、content、policy、result、port
-│   ├── knowledge/     # service、command、port
+│   ├── knowledge/     # service、command、result、port、exception
 │   └── auth/          # 最小请求身份、身份 ID 规则及缺少身份异常
 ├── domain/
 │   ├── user/          # model、exception
@@ -64,7 +64,7 @@ src/main/java/com/item/aisummary/
 └── infrastructure/
     ├── user/          # config、persistence、reference
     ├── file/          # config、persistence、storage
-    ├── knowledge/     # config、persistence
+    ├── knowledge/     # config、persistence、ai
     ├── persistence/   # 共享 UTC typehandler
     ├── time/          # 共享 UTC Clock 装配
     ├── security/      # BCrypt 摘要适配
@@ -174,9 +174,9 @@ src/main/resources/
 
 ## Spring AI 规则
 
-- 当前使用 `spring-ai-starter-model-openai`。
+- 当前使用 `spring-ai-starter-model-openai`、`spring-ai-markdown-document-reader` 和 `spring-ai-starter-vector-store-qdrant`，版本均由现有 2.0.1 BOM 管理。
 - 用例通过应用层定义的外部能力接口调用 AI，例如摘要功能使用 `SummaryGenerator`。基础设施适配依赖 Spring AI 抽象接口，供应商特有实现封装在该边界内；应用层和领域层不直接依赖 `ChatModel`、`ChatClient` 或供应商 SDK。
-- 默认配置必须保持 `spring.ai.model.chat=none`，使没有 API Key 的环境可以启动和测试。后续新增依赖模型的接口时，必须明确模型关闭时的错误响应，并保持健康检查和上下文测试正常。
+- 默认保持 `spring.ai.model.chat=none`、`spring.ai.model.embedding=none`、`spring.ai.vectorstore.type=none` 和 RAG 构建关闭，使没有 API Key 或 Qdrant 的环境可以启动和测试。构建开启时要求显式 OpenAI Embedding 与 Qdrant，缺少依赖拒绝启动；关闭时不装配 `KnowledgeIndexBuildService`，基础服务和健康检查仍可用。
 - 需要启用 OpenAI 时使用环境变量：
 
 ```text
@@ -277,21 +277,56 @@ SDK 超时要求正整数毫秒且不超过 Integer.MAX_VALUE 毫秒；不保证
 
 ## 知识库基础服务与表结构约定
 
-- 已实现 `knowledge_base`、`knowledge_document`、`knowledge_document_revision`、`knowledge_chunk` 的领域对象、真实 MyBatis 持久化和内部应用服务。字段说明见 `docs/reference/database/knowledge.md`，调用合同见 `docs/modules/knowledge.md`。本轮没有知识库 HTTP、删除、任务、版本发布、解析、切片、向量化、检索或聊天业务。
+- 已实现知识库四表领域、MyBatis 持久化、内部基础服务和 txt/md 同步构建。字段见 `docs/reference/database/knowledge.md`，调用见 `docs/modules/knowledge.md`。没有知识库 HTTP、权限、删除、异步任务、PDF/DOCX/OCR、检索或聊天。
 - 服务按用例组织，无 Service/Impl 套层。`KnowledgeBaseService` 创建、详情、列表和改名；名称 trim 后非空白且最多 100 个 Java 字符，允许多库同名。业务 ID 为 32 位 UUID，时钟复用现有 Clock 并截断到微秒。
 - `KnowledgeDocumentService.register(actorUserId,knowledgeBaseId,fileId)` 先校验显式身份及库存在，再通过 `FileContentService.requireOwnedProcessable` 校验源文件。只查询元数据；不得读取正文、调用文件 Mapper 或将文件归属视为知识库授权。新文档 status=1、index_status=pending，活动版本和失败摘要为空。
 - 重复库内文件登记报 `DOCUMENT_ALREADY_REGISTERED`，数据库唯一索引兜底。`KnowledgeRevisionService.create(documentId)` 先确认文档存在，使用 MAX + 1 创建 building 版本；竞争报 `REVISION_NUMBER_CONFLICT`，达到 int 上限报 `REVISION_NUMBER_EXHAUSTED`，不自动重试。新版本 chunk_count=0，created_at/started_at 为进入 building 的时间，摘要、失败信息和其他生命周期时间为空，不修改文档活动版本。
 - `KnowledgeChunkService.saveBatch(revisionId,commands)` 只接受 building 版本。输入没有 revisionId/片段 ID，所有片段由本次入口确定归属并生成新 ID。批次非空、正文非空白、序号非负、批内序号唯一；已存序号冲突报 `CHUNK_SEQUENCE_CONFLICT`，非 building 报 `REVISION_NOT_BUILDING`。不提供正文更新接口。
 - 批次采用追加语义。通过 Spring 注入的服务调用事务入口，使用 READ_COMMITTED 并锁住目标版本；基础设施检查实际连接隔离级别，不兼容的外层事务在写入前明确失败。插入和实际总数更新在同一事务中，写入行数必须符合预期。数据库异常和业务冲突继续传播并回滚整批，兼容外层事务回滚也共同回滚；同版本并发批次串行执行。不自行 new 事务服务，也不添加通用事务框架。
 - `heading_path` 保持有序标题列表，标题层级为正、标题非空白；JSON NULL 与空数组分别还原。使用既有 Jackson 3 和专用类型处理器；MySQL 绑定 JSON 文本，H2 绑定原生 UTF-8 JSON 字节，避免把数组保存成字符串。
-- token_count 可空，有值时非负。偏移同时空或满足 0 <= start_offset < end_offset；页码同时空或满足 1 <= page_start <= page_end。正文保留原样，不以片段长度限制全文偏移，不计算 Token 或虚构位置。
+- token_count 可空，有值时非负。偏移同时空或满足 0 <= start_offset < end_offset；页码同时空或满足 1 <= page_start <= page_end。正文保留原样，不以片段长度限制全文偏移，不填充估算的 Token 数量或虚构位置。
 - 详情与按关联列表查询对不存在的关联抛 `KnowledgeNotFoundException`；合法但无子记录时返回空列表。版本按版本号升序、片段按 sequence_no 升序。内部异常尚未定义公开 HTTP 错误合同。
 - 知识库只保存自身信息，移除 `owner_user_id` 及其唯一索引。用户访问关系留待后续权限表管理，本次不创建权限表，也不将缺少所有者字段解释为公开访问。
 - 保留库内文件唯一、文档内版本号唯一、版本内片段序号唯一。沿用逻辑关联，不新增物理外键或级联删除；文件归属与活动版本一致性仍需业务校验。
 - 版本表保留整体状态、失败摘要、源文件摘要、片段数量和时间。不保存 `parser_strategy`、`chunking_strategy`、`chunk_size`、`chunk_overlap`、`quality_status`、`normalization_strategy`、`vector_route_key`，片段表同样不保存切片策略；旧实体和 Mapper 不可原样迁入。
 - 不新增 `stage_status`，移除 `cleanup_status`。保留 `cleaned_at` 作为清理完成时间；为空不区分未清理、无需清理或清理失败。
 - 保留偏移、页码和标题信息，但未知时为空。UTF-16 偏移相对于处理后全文，不是原文件字节或 PDF 坐标；源全文持久化、OCR 坐标与 Word 位置在对应需求实现时另行确定。
-- 正式与 H2 schema 同步维护字段、可空性和索引。生产脚本仍手动执行，`IF NOT EXISTS` 不升级旧表；本次不导入历史数据或操作向量。
+- 正式与 H2 schema 同步维护字段、可空性和索引。生产脚本仍手动执行，`IF NOT EXISTS` 不升级旧表；不自动导入历史数据或清理既有向量集合。
+
+### txt/md RAG 构建约定
+
+- `KnowledgeIndexBuildService.build(actorUserId,knowledgeDocumentId)` 为唯一完整构建入口；应用通过 `KnowledgeContentProcessor`、`KnowledgeVectorIndex` 自有合同协调，不依赖 Spring AI Document/Reader/Splitter/EmbeddingModel/VectorStore 或 SDK。
+- 显式身份先校验；先查询文档与可处理文件元数据，再按文件名末段扩展名校验 txt/md。其他格式、归属和状态错误在创建版本前拒绝。文件归属不代表知识库权限。
+- 构建开始通过 READ_COMMITTED 短事务锁文档，拒绝任何已有 building，返回 `BUILD_ALREADY_RUNNING`。MAX+1、状态与计数沿用现有四表，不自动重试，不新增状态字段或 published 枚举。进程中断的 building 恢复尚未实现。
+- `build` 使用 `Propagation.NEVER` 拒绝外层数据库事务，生命周期与片段服务均通过 Spring 代理调用；不把文件读取、Embedding、Qdrant 或清理放入数据库事务。
+- 同一原始流由 DigestInputStream 计算实际 SHA-256；内容处理消费完整字节，实际大小上限跟随 APP_FILE_MAX_SIZE。先严格验证 UTF-8，再通过受控内存 Resource 使用 TextReader 或 MarkdownDocumentReader；Markdown Reader 要求 UTF-8 默认字符集。摘要不匹配、空白与未完整消费失败，不发布。
+- Markdown 保留代码块与引用，并按水平分隔线创建文档边界；只使用组件结构解析，不实现自定义 Markdown 或切片算法。唯一 TokenTextSplitter 固定 CL100K_BASE，默认 512/200/0/100000、keepSeparator=true，包含中英文标点与换行，无重叠。检查总片段数及最终 Token 粒度，拒绝上限后追加的过大余片。
+- 自动构建序号从 0 连续分配，默认每批 128；先保存片段再写向量。heading_path、token_count、偏移、页码保持空，不将 Reader 元数据冒充完整路径或精确位置。
+- Qdrant 使用同一片段业务 UUID；Spring AI 2.0.1 要求标准 UUID 字符串，适配器为 32 位 ID 补连字符，metadata.knowledge_chunk_id 保留原值，不生成新 ID。metadata 还包含知识库、文档、revision、文件、序号、名称、MIME、source_sha256；清理严格按 revision_id 等值过滤。
+- 全部片段和向量成功后才调用发布短事务：验证归属、building、真实片段计数及活动关系，原子更新 ready、源摘要、完成与发布时间、文档 active_revision_id/indexed，清空文档失败摘要，旧活动 ready 变 superseded。后续检索必须从 MySQL 读取活动指针，再按 revision_id 过滤；ready 或 Qdrant 中存在向量不足以表示可检索。
+- 普通构建失败标记 failed 并按当前 revision 删除向量；首次失败文档 failed，重建失败保留 indexed 与旧指针。保留失败版本及 MySQL 片段。清理成功才写 cleaned_at；清理失败保留原失败阶段/编码并追加摘要，异常 cleanupCompleted=false。
+- 发布事务失败不切换活动指针，派生向量保留待核对并告警。发布后旧向量清理失败不回滚新活动版本，结果 oldRevisionCleanupCompleted=false，旧版本保存 cleanup 失败摘要。数据库也不可用时可能无法保存失败事实，继续返回失败并使用固定告警。
+- MySQL 与 Qdrant 无共同事务，不声称完整补偿、幂等性、中断恢复或全面并发治理。日志与失败摘要不输出源正文、Prompt、模型响应、凭据或供应商异常正文。
+
+### RAG 环境变量
+
+| 变量 | 默认值与规则 |
+| --- | --- |
+| `APP_KNOWLEDGE_RAG_ENABLED` | false；启用才装配内部构建入口 |
+| `SPRING_AI_MODEL_EMBEDDING`、`SPRING_AI_VECTORSTORE_TYPE` | none；启用分别为 openai、qdrant |
+| `OPENAI_EMBEDDING_API_KEY` | 空，模型可回退公共 OPENAI_API_KEY，本地提供 |
+| `OPENAI_EMBEDDING_MODEL` | text-embedding-3-small |
+| `OPENAI_EMBEDDING_DIMENSIONS` | 空，使用模型默认维度；提供时为正整数，与集合一致 |
+| `QDRANT_HOST`、`QDRANT_PORT`、`QDRANT_USE_TLS` | localhost、6334 gRPC、false |
+| `QDRANT_API_KEY` | 空，按服务要求本地提供 |
+| `QDRANT_COLLECTION_NAME`、`QDRANT_INITIALIZE_SCHEMA` | knowledge_chunks、false；开启初始化仅创建缺失集合 |
+| `RAG_BATCH_SIZE` | 128，范围 1～1024 |
+| `RAG_CHUNK_SIZE`、`RAG_MIN_CHUNK_SIZE_CHARS` | 512 正整数、200 非负 |
+| `RAG_MIN_CHUNK_LENGTH_TO_EMBED` | 0，首版只允许 0，防止丢弃短内容 |
+| `RAG_MAX_NUM_CHUNKS`、`RAG_KEEP_SEPARATOR` | 100000 正整数、true |
+| `RAG_PUNCTUATION_MARKS` | `.?!;。？！；` 与换行，非空；Properties 的 `\n` 表示换行 |
+
+源大小复用 `APP_FILE_MAX_SIZE`，正且小于 Integer.MAX_VALUE 字节；提高文件上限时重新评估分片数与内存占用。RAG 参数不写历史版本，更换模型、维度、集合或切片规则时另行评估兼容性与重建。
 
 ## 测试与验证
 
@@ -313,7 +348,7 @@ mvn clean verify
 
 用户行为测试覆盖 HTTP、摘要、服务失败、真实 Mapper SQL、引用切换和请求身份。文件测试覆盖 H2 真 Mapper 生命周期、所有权和状态、实际流大小、摘要、关闭资源、SDK 边界、条件装配及真实容器 multipart 限制。普通测试强制关闭模型，使用 H2 和存储替身，不依赖本机 MySQL、Docker、外部对象存储或个人凭据。
 
-知识库测试覆盖四表真实 Mapper 和字段、同名多库、文件元数据归属、版本号递增及竞争冲突、标题 JSON 和可空位置、UTC 微秒，以及片段排序、计数和事务失败回滚。事务测试不使用测试外层事务；普通测试仍只访问隔离 H2，不描述为真实 MySQL 验证。
+知识库测试覆盖四表真实 Mapper 和字段、同名多库、文件元数据归属、版本号递增及竞争冲突、标题 JSON 和可空位置、UTC 微秒，以及片段排序、计数和事务失败回滚。知识库测试另外覆盖真实 Reader/Splitter、UTF-8、源摘要、流关闭、连续批次与向量元数据、building 互斥、发布回滚、首次失败与重建失败、当前和旧版本清理事实、开关与依赖检查。模型/Qdrant 使用替身，不进行外部调用。事务测试不使用测试外层事务；普通测试仍只访问隔离 H2，不描述为真实 MySQL 或 OpenAI/Qdrant 验证。
 
 显式真实 MySQL 验收：先通过进程环境变量配置上表中的 `USER_TEST_DB_*`（仅写入 `.env` 不会生效），再运行 `mvn -Pmysql-it verify`。该 profile 执行正式 schema 和完整 HTTP CRUD，仅清理本次创建的测试记录。H2 验证不能被描述为 MySQL 验证。实际启动验证仍应请求 `GET /api/health`。
 
@@ -343,6 +378,12 @@ mvn clean verify
 - 测试和构建命令变化。
 
 公开 HTTP 接口文档维护在 `docs/reference/api/`，README 提供入口。新增或修改请求参数、校验规则、状态码、响应字段或错误码时，同步对应业务接口文档及公共约定；只记录生产源码中实际存在的接口，不把测试 Controller 或内部 Java 合同列为公开接口。
+
+## Git 操作与交付边界
+
+- 代理只按用户当前声明的任务工作。完成未声明的附加任务后，即使测试和构建通过，也不得自行执行 `git add`、`git commit`、`git push`、创建 Pull Request 或合并；验证通过不等于获得提交授权。
+- 当前任务默认在现有分支和工作区中完成。代理不得独自创建新分支，也不得为了隔离任务自行切换到新分支；需要新分支时先说明原因、名称和影响，等待用户明确授权或由用户先创建。
+- 用户明确要求提交、推送、创建 Pull Request、合并或分支操作时，仍需只处理该声明范围，并在执行前检查差异和验证结果。未明确授权时保留工作区改动，在交付说明中列出文件和验证结果。
 
 ## 代理交付要求
 

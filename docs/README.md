@@ -15,7 +15,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
-| [运行指南](./guides/getting-started.md) | 准备 MySQL、建表、创建 `.env`、启动应用、启用文件存储 |
+| [运行指南](./guides/getting-started.md) | 准备 MySQL、建表、创建 `.env`、启动应用、启用文件存储与 txt/md 入库 |
 | [测试说明](./guides/testing.md) | 普通测试、定向测试、真实 MySQL 用户验收及验证边界 |
 
 ## 架构与模块
@@ -25,13 +25,13 @@
 | [工程结构](./architecture.md) | 四层职责、包结构、依赖方向、请求身份、公共错误与 UTC 时间 |
 | [用户模块](./modules/user.md) | CRUD、密码处理、按意图更新字段、逻辑删除和用户引用 |
 | [文件模块](./modules/file.md) | 两次读流、元数据与对象存储、归属校验、签名和资源管理 |
-| [知识库模块](./modules/knowledge.md) | 内部服务调用、版本号冲突、片段追加、事务和源码入口 |
+| [知识库模块](./modules/knowledge.md) | 内部服务、Reader/Splitter、向量索引、版本发布与失败清理 |
 
 ## 参考资料
 
 | 文档 | 内容 |
 | --- | --- |
-| [配置说明](./reference/configuration.md) | 配置加载方式、运行变量、默认值、存储开关及专用测试变量 |
+| [配置说明](./reference/configuration.md) | 配置加载方式、运行变量、默认值、存储与 RAG 开关及专用测试变量 |
 | [HTTP API](./reference/api/README.md) | 已实现接口的参数、响应、状态码、错误码与调用示例 |
 | [知识库表结构](./reference/database/knowledge.md) | 当前四表的字段、可空性、索引、数据关系和设计限制 |
 

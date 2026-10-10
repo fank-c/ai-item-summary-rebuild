@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS `file_asset` (
   DEFAULT CHARACTER SET = utf8mb4
   COLLATE = utf8mb4_unicode_ci;
 
--- 知识库四张核心表，支持基础持久化与内部服务，尚未接入 RAG；字段说明见 docs/reference/database/knowledge.md。
+-- 知识库四张核心表，支持基础内部服务和 txt/md RAG 入库；字段说明见 docs/reference/database/knowledge.md。
 -- 此脚本用于初始化，不会升级同名旧表、复制历史数据或操作向量库。时间统一采用 UTC。
 CREATE TABLE IF NOT EXISTS `knowledge_base` (
     `id` VARCHAR(32) NOT NULL COMMENT '知识库 ID',
@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS `knowledge_document_revision` (
     `started_at` DATETIME(6) NOT NULL,
     `completed_at` DATETIME(6) NULL,
     `published_at` DATETIME(6) NULL COMMENT '发布为当前版本的时间',
-    `cleaned_at` DATETIME(6) NULL COMMENT '派生片段和向量清理完成时间',
+    `cleaned_at` DATETIME(6) NULL COMMENT '向量清理完成时间，数据库片段保留',
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_knowledge_revision_document_number` (`knowledge_document_id`, `revision_number`),
     KEY `idx_knowledge_revision_document_status` (`knowledge_document_id`, `revision_status`)

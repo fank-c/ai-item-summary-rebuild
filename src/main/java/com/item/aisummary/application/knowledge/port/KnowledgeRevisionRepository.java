@@ -1,6 +1,8 @@
 package com.item.aisummary.application.knowledge.port;
 
 import com.item.aisummary.domain.knowledge.model.KnowledgeDocumentRevision;
+
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -56,4 +58,57 @@ public interface KnowledgeRevisionRepository {
      * @return 数据库受影响行数
      */
     int updateChunkCount(String id, int chunkCount);
+
+    /**
+     * 将版本流转为 ready，记录片段总数、源文件摘要与发布时间戳。
+     *
+     * @param id 版本 ID
+     * @param documentId 归属的知识文档 ID
+     * @param chunkCount 片段总数
+     * @param sourceSha256 源文件 SHA-256 摘要
+     * @param now 微秒时间戳
+     * @return 影响行数（预期为 1）
+     */
+    int complete(String id, String documentId, int chunkCount, String sourceSha256, Instant now);
+
+    /**
+     * 将旧活动版本状态流转为 superseded。
+     *
+     * @param id 原活动版本 ID
+     * @param documentId 所属文档 ID
+     * @return 影响行数（预期为 1）
+     */
+    int supersede(String id, String documentId);
+
+    /**
+     * 将版本流转为 failed，记录失败阶段、错误码与失败原因。
+     *
+     * @param id 版本 ID
+     * @param stage 失败阶段标识
+     * @param code 脱敏业务错误码
+     * @param message 失败原因摘要
+     * @param now 失败时刻微秒时间戳
+     * @return 影响行数（预期为 1）
+     */
+    int fail(String id, String stage, String code, String message, Instant now);
+
+    /**
+     * 记录非活动版本的向量已在向量库完成物理清理（写入 cleaned_at）。
+     *
+     * @param id 版本 ID
+     * @param now 清理完成微秒时间戳
+     * @return 影响行数（预期为 1）
+     */
+    int markCleaned(String id, Instant now);
+
+    /**
+     * 记录非活动版本向量清理失败信息。
+     *
+     * @param id 版本 ID
+     * @param stage 失败阶段标识
+     * @param code 失败错误码
+     * @param message 清理失败摘要
+     * @return 影响行数（预期为 1）
+     */
+    int recordCleanupFailure(String id, String stage, String code, String message);
 }

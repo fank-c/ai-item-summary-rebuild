@@ -11,7 +11,11 @@ import java.util.Optional;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
-/** 知识片段表的 MyBatis 持久化适配器，负责把唯一约束转成稳定业务冲突。 */
+/**
+ * 知识片段表的 MyBatis 持久化适配器。
+ *
+ * <p>处理片段实体持久化、序号唯一约束冲突转换与按版本聚合查询。
+ */
 @Repository
 public class MyBatisKnowledgeChunkRepository implements KnowledgeChunkRepository {
     private final KnowledgeChunkMapper mapper;
@@ -21,14 +25,7 @@ public class MyBatisKnowledgeChunkRepository implements KnowledgeChunkRepository
     }
 
     /**
-     * 插入单个知识片段记录。
-     *
-     * <p>若同一版本内片段序号唯一约束冲突，转换为 CHUNK_SEQUENCE_CONFLICT 业务异常。
-     *
-     * @param chunk 待插入的片段领域对象
-     * @return 插入成功后的片段领域对象
-     * @throws KnowledgeConflictException 片段序号冲突
-     * @throws IllegalStateException 受影响行数不为 1
+     * 插入单个片段记录，版本内序号冲突抛出 CHUNK_SEQUENCE_CONFLICT。
      */
     @Override
     public KnowledgeChunk insert(KnowledgeChunk chunk) {

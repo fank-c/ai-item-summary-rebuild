@@ -13,7 +13,11 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
-/** JSON 数组与有序标题列表往返，不使用依赖 Jackson 2 的默认处理器。 */
+/**
+ * 知识片段标题路径列表（List<Heading>）与数据库 JSON 字段的 MyBatis 类型处理器。
+ *
+ * <p>基于 Jackson 3 处理双向序列化；区分 H2（字节绑定）与 MySQL（字符串绑定）驱动方言。
+ */
 public final class HeadingPathTypeHandler extends BaseTypeHandler<List<Heading>> {
     private static final JsonMapper JSON = JsonMapper.shared();
     private static final TypeReference<List<Heading>> HEADINGS = new TypeReference<>() {};

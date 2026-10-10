@@ -31,6 +31,25 @@ class AiItemSummaryEnvironmentTest {
             SPRING_AI_MODEL_CHAT=openai
             OPENAI_API_KEY=fixture-key
             OPENAI_MODEL=fixture-model
+            APP_KNOWLEDGE_RAG_ENABLED=true
+            SPRING_AI_MODEL_EMBEDDING=openai
+            SPRING_AI_VECTORSTORE_TYPE=qdrant
+            OPENAI_EMBEDDING_API_KEY=fixture-embedding-key
+            OPENAI_EMBEDDING_MODEL=fixture-embedding-model
+            OPENAI_EMBEDDING_DIMENSIONS=256
+            QDRANT_HOST=fixture-host
+            QDRANT_PORT=16334
+            QDRANT_USE_TLS=true
+            QDRANT_API_KEY=fixture-qdrant-key
+            QDRANT_COLLECTION_NAME=fixture-collection
+            QDRANT_INITIALIZE_SCHEMA=true
+            RAG_BATCH_SIZE=16
+            RAG_CHUNK_SIZE=256
+            RAG_MIN_CHUNK_SIZE_CHARS=80
+            RAG_MIN_CHUNK_LENGTH_TO_EMBED=0
+            RAG_MAX_NUM_CHUNKS=1000
+            RAG_KEEP_SEPARATOR=false
+            RAG_PUNCTUATION_MARKS=。；
             APP_AUTH_MOCK_USER_ID=local-user
             APP_AUTH_MOCK_USERNAME=本地演示用户
             APP_FILE_MAX_SIZE=7MB
@@ -57,6 +76,26 @@ class AiItemSummaryEnvironmentTest {
         assertThat(values.getProperty("spring.ai.model.chat")).isEqualTo("openai");
         assertThat(values.getProperty("spring.ai.openai.api-key")).isEqualTo("fixture-key");
         assertThat(values.getProperty("spring.ai.openai.chat.model")).isEqualTo("fixture-model");
+        assertThat(values.getProperty("spring.ai.model.embedding")).isEqualTo("openai");
+        assertThat(values.getProperty("spring.ai.vectorstore.type")).isEqualTo("qdrant");
+        assertThat(values.getProperty("app.knowledge.rag.enabled")).isEqualTo("true");
+        assertThat(values.getProperty("spring.ai.openai.embedding.api-key")).isEqualTo("fixture-embedding-key");
+        assertThat(values.getProperty("spring.ai.openai.embedding.model")).isEqualTo("fixture-embedding-model");
+        assertThat(values.getProperty("spring.ai.openai.embedding.dimensions")).isEqualTo("256");
+        assertThat(values.getProperty("spring.ai.vectorstore.qdrant.host")).isEqualTo("fixture-host");
+        assertThat(values.getProperty("spring.ai.vectorstore.qdrant.port")).isEqualTo("16334");
+        assertThat(values.getProperty("spring.ai.vectorstore.qdrant.use-tls")).isEqualTo("true");
+        assertThat(values.getProperty("spring.ai.vectorstore.qdrant.api-key")).isEqualTo("fixture-qdrant-key");
+        assertThat(values.getProperty("spring.ai.vectorstore.qdrant.collection-name")).isEqualTo("fixture-collection");
+        assertThat(values.getProperty("spring.ai.vectorstore.qdrant.initialize-schema")).isEqualTo("true");
+        assertThat(values.getProperty("app.knowledge.rag.batch-size")).isEqualTo("16");
+        assertThat(values.getProperty("app.knowledge.rag.chunk-size")).isEqualTo("256");
+        assertThat(values.getProperty("app.knowledge.rag.min-chunk-size-chars")).isEqualTo("80");
+        assertThat(values.getProperty("app.knowledge.rag.min-chunk-length-to-embed")).isEqualTo("0");
+        assertThat(values.getProperty("app.knowledge.rag.max-num-chunks")).isEqualTo("1000");
+        assertThat(values.getProperty("app.knowledge.rag.keep-separator")).isEqualTo("false");
+        assertThat(values.getProperty("app.knowledge.rag.punctuation-marks")).isEqualTo("。；");
+        assertThat(values.getProperty("app.knowledge.rag.max-source-size")).isEqualTo("7MB");
         assertThat(values.getProperty("app.auth.mock.user-id")).isEqualTo("local-user");
         assertThat(values.getProperty("app.auth.mock.username")).isEqualTo("本地演示用户");
         assertThat(values.getProperty("app.file.upload.max-size")).isEqualTo("7MB");
@@ -94,6 +133,9 @@ class AiItemSummaryEnvironmentTest {
         assertThat(values.getProperty("spring.datasource.username")).isEmpty();
         assertThat(values.getProperty("spring.datasource.password")).isEmpty();
         assertThat(values.getProperty("spring.ai.model.chat")).isEqualTo("none");
+        assertThat(values.getProperty("spring.ai.model.embedding")).isEqualTo("none");
+        assertThat(values.getProperty("spring.ai.vectorstore.type")).isEqualTo("none");
+        assertThat(values.getProperty("app.knowledge.rag.enabled")).isEqualTo("false");
         assertThat(values.getProperty("spring.ai.openai.api-key")).isEmpty();
         assertThat(values.getProperty("app.file.storage.minio.enabled")).isEqualTo("false");
         assertThat(values.getProperty("app.file.storage.aliyun.enabled")).isEqualTo("false");
@@ -134,7 +176,7 @@ class AiItemSummaryEnvironmentTest {
             .redirectErrorStream(true).redirectOutput(log.toFile());
         // 不继承开发者的服务开关、凭据、配置位置或 Java 注入参数。
         builder.environment().keySet().removeIf(key -> key.matches(
-            "(?i)(DB_.*|OPENAI_.*|MINIO_.*|ALIYUN_OSS_.*|FILE_STORAGE_.*|APP_.*|USER_TEST_DB_.*|SPRING_.*|SERVER_PORT|JAVA_TOOL_OPTIONS|JDK_JAVA_OPTIONS|_JAVA_OPTIONS)"));
+            "(?i)(DB_.*|OPENAI_.*|QDRANT_.*|RAG_.*|MINIO_.*|ALIYUN_OSS_.*|FILE_STORAGE_.*|APP_.*|USER_TEST_DB_.*|SPRING_.*|SERVER_PORT|JAVA_TOOL_OPTIONS|JDK_JAVA_OPTIONS|_JAVA_OPTIONS)"));
         builder.environment().putAll(variables);
         Process process = builder.start();
         try {
@@ -158,7 +200,14 @@ class AiItemSummaryEnvironmentTest {
             ConfigDataEnvironmentPostProcessor.applyTo(environment);
             var values = new Properties();
             for (String key : List.of("server.port", "spring.datasource.url", "spring.datasource.username",
-                    "spring.datasource.password", "spring.ai.model.chat", "spring.ai.openai.api-key",
+                    "spring.datasource.password", "spring.ai.model.chat", "spring.ai.model.embedding",
+                    "spring.ai.vectorstore.type", "app.knowledge.rag.enabled", "spring.ai.openai.api-key",
+                    "spring.ai.openai.embedding.api-key", "spring.ai.openai.embedding.model", "spring.ai.openai.embedding.dimensions",
+                    "spring.ai.vectorstore.qdrant.host", "spring.ai.vectorstore.qdrant.port", "spring.ai.vectorstore.qdrant.use-tls",
+                    "spring.ai.vectorstore.qdrant.api-key", "spring.ai.vectorstore.qdrant.collection-name", "spring.ai.vectorstore.qdrant.initialize-schema",
+                    "app.knowledge.rag.batch-size", "app.knowledge.rag.chunk-size", "app.knowledge.rag.min-chunk-size-chars",
+                    "app.knowledge.rag.min-chunk-length-to-embed", "app.knowledge.rag.max-num-chunks", "app.knowledge.rag.keep-separator",
+                    "app.knowledge.rag.punctuation-marks", "app.knowledge.rag.max-source-size",
                     "spring.ai.openai.chat.model", "app.auth.mock.user-id", "app.auth.mock.username",
                     "app.file.upload.max-size", "spring.servlet.multipart.max-file-size",
                     "spring.servlet.multipart.max-request-size", "app.file.storage.download-url-expiration",

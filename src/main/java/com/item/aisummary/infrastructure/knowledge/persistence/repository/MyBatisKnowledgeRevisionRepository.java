@@ -8,15 +8,20 @@ import com.item.aisummary.domain.knowledge.exception.KnowledgeConflictException;
 import com.item.aisummary.domain.knowledge.model.KnowledgeDocumentRevision;
 import com.item.aisummary.infrastructure.knowledge.persistence.entity.KnowledgeRevisionEntity;
 import com.item.aisummary.infrastructure.knowledge.persistence.mapper.KnowledgeRevisionMapper;
-import java.sql.Connection;
-import java.sql.SQLException;
-import java.util.List;
-import java.util.Optional;
-import javax.sql.DataSource;
+import com.item.aisummary.infrastructure.persistence.typehandler.UtcInstantTypeHandler;
+
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.datasource.DataSourceUtils;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
+
+import javax.sql.DataSource;
 
 /**
  * 文档版本表的 MyBatis 持久化适配器。
@@ -145,7 +150,102 @@ public class MyBatisKnowledgeRevisionRepository implements KnowledgeRevisionRepo
                         .set("chunk_count", chunkCount));
     }
 
-    /** 校验当前线程处于活动事务中，并且底层连接确实采用 READ_COMMITTED 隔离级别。 */
+    /**
+     * 将版本流转为 ready，记录片段总数、源文件摘要与发布时间戳。
+     */
+    @Override
+    public int complete(
+            String id, String documentId, int chunkCount, String sourceSha256, Instant now) {
+        return mapper.update(
+                null,
+                new UpdateWrapper<KnowledgeRevisionEntity>()
+                        .eq("id", id)
+                        .eq("knowledge_document_id", documentId)
+                        .eq("revision_status", RevisionStatus.BUILDING.value())
+                        .eq("chunk_count", chunkCount)
+                        .set("revision_status", RevisionStatus.READY.value())
+                        .set("source_sha256", sourceSha256)
+                        .set("completed_at", now, utcMapping())
+                        .set("published_at", now, utcMapping())
+                        .set("failure_stage", null)
+                        .set("failure_code", null)
+                        .set("failure_message", null));
+    }
+
+    /**
+     * 将旧活动版本状态流转为 superseded。
+     */
+    @Override
+    public int supersede(String id, String documentId) {
+        return mapper.update(
+                null,
+                new UpdateWrapper<KnowledgeRevisionEntity>()
+                        .eq("id", id)
+                        .eq("knowledge_document_id", documentId)
+                        .eq("revision_status", RevisionStatus.READY.value())
+                        .isNotNull("published_at")
+                        .set("revision_status", RevisionStatus.SUPERSEDED.value()));
+    }
+
+    /**
+     * 将版本流转为 failed，记录失败阶段、错误码与失败原因。
+     */
+    @Override
+    public int fail(String id, String stage, String code, String message, Instant now) {
+        return mapper.update(
+                null,
+                new UpdateWrapper<KnowledgeRevisionEntity>()
+                        .eq("id", id)
+                        .eq("revision_status", RevisionStatus.BUILDING.value())
+                        .set("revision_status", RevisionStatus.FAILED.value())
+                        .set("failure_stage", stage)
+                        .set("failure_code", code)
+                        .set("failure_message", message)
+                        .set("completed_at", now, utcMapping()));
+    }
+
+    /**
+     * 标记非活动版本（failed 或 superseded）的向量已在向量库完成物理清理。
+     */
+    @Override
+    public int markCleaned(String id, Instant now) {
+        return mapper.update(
+                null,
+                new UpdateWrapper<KnowledgeRevisionEntity>()
+                        .eq("id", id)
+                        .in(
+                                "revision_status",
+                                RevisionStatus.FAILED.value(),
+                                RevisionStatus.SUPERSEDED.value())
+                        .set("cleaned_at", now, utcMapping()));
+    }
+
+    /**
+     * 记录非活动版本向量物理清理失败的信息。
+     */
+    @Override
+    public int recordCleanupFailure(String id, String stage, String code, String message) {
+        return mapper.update(
+                null,
+                new UpdateWrapper<KnowledgeRevisionEntity>()
+                        .eq("id", id)
+                        .in(
+                                "revision_status",
+                                RevisionStatus.FAILED.value(),
+                                RevisionStatus.SUPERSEDED.value())
+                        .set("failure_stage", stage)
+                        .set("failure_code", code)
+                        .set("failure_message", message));
+    }
+
+    /** 生成 UTC 字段映射 TypeHandler 参数字符串。 */
+    private static String utcMapping() {
+        return "typeHandler=" + UtcInstantTypeHandler.class.getName();
+    }
+
+    /**
+     * 断言当前处于事务中且隔离级别严格为 READ_COMMITTED，防止快照读导致总数聚合失准。
+     */
     private void requireReadCommittedTransaction() {
         if (!TransactionSynchronizationManager.isActualTransactionActive()) {
             throw new IllegalStateException("版本锁必须在事务中使用");

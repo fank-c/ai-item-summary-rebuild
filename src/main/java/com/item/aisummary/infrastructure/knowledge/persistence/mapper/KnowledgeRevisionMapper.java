@@ -6,7 +6,9 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
-/** knowledge_document_revision 表的 MyBatis Mapper。 */
+/**
+ * 文档版本表（knowledge_document_revision）的 MyBatis-Plus Mapper 接口。
+ */
 @Mapper
 public interface KnowledgeRevisionMapper extends BaseMapper<KnowledgeRevisionEntity> {
     /**

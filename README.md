@@ -1,6 +1,6 @@
 # AI Item Summary
 
-基于 Java 21、Spring Boot 4.1.1 和 Spring AI 2.0.1 的学习工程，逐步复现 AI 应用的常见功能。当前已实现用户、文件和知识库基础模块，对话和 RAG（检索增强生成）按后续学习需求加入。
+基于 Java 21、Spring Boot 4.1.1 和 Spring AI 2.0.1 的学习工程，逐步复现 AI 应用的常见功能。当前已实现用户、文件、知识库基础服务和 txt/md RAG 同步入库；检索与问答按后续学习需求加入。
 
 ## 当前能力
 
@@ -8,12 +8,12 @@
 | --- | --- | --- |
 | 用户 | 资料 CRUD、BCrypt 密码摘要、逻辑删除、跨模块用户引用 | [用户模块](./docs/modules/user.md) |
 | 文件 | 服务端上传、临时下载地址、删除、带归属校验的内部内容读取 | [文件模块](./docs/modules/file.md) |
-| 知识库基础 | 四表持久化、知识库创建与改名、文档登记、building 版本、片段事务批次与查询 | [知识库模块](./docs/modules/knowledge.md) |
+| 知识库 | 四表持久化、基础内部服务、txt/md 读取切分、OpenAI Embedding、Qdrant 入库与版本发布 | [知识库模块](./docs/modules/knowledge.md) |
 | 公共能力 | 模拟请求身份、ProblemDetail 错误响应、请求标识、健康检查 | [工程结构与边界](./docs/architecture.md) |
 
-用户、文件及知识库元数据使用 MySQL，文件对象按配置存入 MinIO 或阿里云 OSS。H2 仅用于自动测试。模型和对象存储默认关闭，这些基础服务不调用 AI 模型。
+用户、文件及知识库元数据使用 MySQL，文件对象按配置存入 MinIO 或阿里云 OSS。H2 仅用于自动测试。聊天模型、Embedding、Qdrant、RAG 构建和对象存储默认关闭。基础元数据服务不调用模型；启用 txt/md 入库后才调用 Embedding 与向量存储。
 
-知识库能力通过内部 Java 服务提供。当前没有知识库 HTTP 接口、访问权限管理、版本发布、解析、切分或向量化；文件归属检查不等于知识库授权。字段与约束见 [知识库表结构](./docs/reference/database/knowledge.md)。
+知识库能力通过内部 Java 服务提供。txt/md 入库入口为 `KnowledgeIndexBuildService.build(actorUserId,knowledgeDocumentId)`，启用步骤见 [运行指南](./docs/guides/getting-started.md#6-启用-txtmd-入库)。当前没有知识库 HTTP、访问权限、检索或问答；文件归属检查不等于知识库授权。字段与约束见 [知识库表结构](./docs/reference/database/knowledge.md)。
 
 ## 快速开始
 
@@ -48,4 +48,4 @@
 mvn clean verify
 ```
 
-普通测试使用独立 H2 和存储替身，不导入本地 `.env`，也不访问真实模型或对象存储。真实 MySQL 用户验收通过 `mvn -Pmysql-it verify` 单独开启，需先设置专用测试库的进程环境变量，详见 [测试说明](./docs/guides/testing.md)。
+普通测试使用独立 H2、真实本地 Reader/Splitter 和存储替身，不导入本地 `.env`，也不访问真实模型、Qdrant 或对象存储。真实 MySQL 用户验收通过 `mvn -Pmysql-it verify` 单独开启，需先设置专用测试库的进程环境变量，详见 [测试说明](./docs/guides/testing.md)。

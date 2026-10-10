@@ -1,6 +1,6 @@
 # 配置说明
 
-生产配置位于 [application.yml](../../src/main/resources/application.yml)，本地模板位于 [.env.example](../../.env.example)。模板覆盖当前全部 29 个运行变量，凭据默认留空。
+生产配置位于 [application.yml](../../src/main/resources/application.yml)，本地模板位于 [.env.example](../../.env.example)。模板覆盖当前全部运行变量，凭据默认留空。
 
 返回 [文档导航](../README.md)。创建本地配置与启动步骤见 [运行指南](../guides/getting-started.md)。
 
@@ -52,11 +52,41 @@ SPRING_AI_MODEL_CHAT=none
 | `DB_URL` | `jdbc:mysql://localhost:3306/ai_item_summary?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true` | 覆盖时保留 UTC 参数 |
 | `DB_USERNAME` | 空 | 本地提供数据库账户 |
 | `DB_PASSWORD` | 空 | 本地提供数据库密码 |
-| `SPRING_AI_MODEL_CHAT` | `none` | `openai` 启用模型；当前用户、文件和知识库基础模块不调用模型 |
+| `SPRING_AI_MODEL_CHAT` | `none` | `openai` 启用聊天模型；当前没有聊天业务调用 |
 | `OPENAI_API_KEY` | 空 | 启用 OpenAI 时提供 |
 | `OPENAI_MODEL` | `gpt-5-mini` | OpenAI 模型名称 |
 
 数据库时间使用 UTC。生产 `DATETIME(6)` 通过显式类型处理器映射为 `Instant`，没有内存数据库回退。
+
+## txt/md RAG 入库
+
+三个开关需一起显式启用：构建为 true、Embedding 为 openai、向量存储为 qdrant。默认关闭，基础元数据与健康接口不需要模型或向量凭据。变量通过主配置映射到 Spring AI 2.0.1 的 Embedding 与 Qdrant 属性。
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `APP_KNOWLEDGE_RAG_ENABLED` | `false` | 是否装配内部构建服务；关闭时该服务 Bean 不存在 |
+| `SPRING_AI_MODEL_EMBEDDING` | `none` | 启用时为 `openai` |
+| `SPRING_AI_VECTORSTORE_TYPE` | `none` | 启用时为 `qdrant`；关闭防止默认创建向量后端 |
+| `OPENAI_EMBEDDING_API_KEY` | 空 | Embedding 专用凭据，未提供有效值时模型可沿用公共 `OPENAI_API_KEY` |
+| `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding 模型，独立于聊天模型 |
+| `OPENAI_EMBEDDING_DIMENSIONS` | 空 | 可选正整数，空时使用模型默认值，集合维度必须匹配 |
+| `QDRANT_HOST` | `localhost` | Qdrant 主机，按实际服务覆盖 |
+| `QDRANT_PORT` | `6334` | gRPC 端口 |
+| `QDRANT_USE_TLS` | `false` | 使用 TLS，托管服务通常需启用 |
+| `QDRANT_API_KEY` | 空 | 按 Qdrant 部署要求本地提供 |
+| `QDRANT_COLLECTION_NAME` | `knowledge_chunks` | 向量集合；验收使用独立集合 |
+| `QDRANT_INITIALIZE_SCHEMA` | `false` | true 时创建缺失集合，不迁移已有集合维度 |
+| `RAG_BATCH_SIZE` | `128` | 每批保存与向量写入数量，范围 1～1024 |
+| `RAG_CHUNK_SIZE` | `512` | 正整数 Token 目标上限，超过输出粒度拒绝发布 |
+| `RAG_MIN_CHUNK_SIZE_CHARS` | `200` | 非负，控制标点截断条件，不是最终最短片段 |
+| `RAG_MIN_CHUNK_LENGTH_TO_EMBED` | `0` | 首版只允许 0，保留非空短正文 |
+| `RAG_MAX_NUM_CHUNKS` | `100000` | 正整数，全局片段上限；增加文件上限需重新评估 |
+| `RAG_KEEP_SEPARATOR` | `true` | 保留分隔符，无重叠窗口 |
+| `RAG_PUNCTUATION_MARKS` | `.?!;。？！；` 与换行 | 非空标点字符串；Properties 中 `\n` 表示换行 |
+
+TokenTextSplitter 编码固定 `CL100K_BASE`。读取大小上限复用 `APP_FILE_MAX_SIZE`，默认 20 MB，必须为正且小于 Integer.MAX_VALUE 字节。源文件固定 UTF-8，Markdown Reader 要求 JVM 默认字符集也是 UTF-8。
+
+构建参数不写入历史版本表，换模型、维度、集合或切片参数后必须评估重建与旧向量兼容性。普通测试关闭模型、Qdrant 和构建，不调用外部服务。调用与失败合同见 [知识库模块](../modules/knowledge.md)。
 
 ## 模拟身份
 
@@ -112,7 +142,7 @@ Unicode 码点指一个完整 Unicode 字符，补充平面字符计为 1。模�
 
 ## 专用 MySQL 测试变量
 
-以下三个变量只用于 `mvn -Pmysql-it verify`，不是上述 29 个运行变量的一部分。模板只把它们列为注释参考。
+以下三个变量只用于 `mvn -Pmysql-it verify`，不是运行变量的一部分。模板只把它们列为注释参考。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -122,4 +152,4 @@ Unicode 码点指一个完整 Unicode 字符，补充平面字符计为 1。模�
 
 设置方式、清理范围和验收边界见 [测试说明](../guides/testing.md#真实-mysql-用户验收)。
 
-普通测试使用 [测试配置](../../src/test/resources/application.yml)，不导入 `.env`，模型及外部存储保持关闭。
+普通测试使用 [测试配置](../../src/test/resources/application.yml)，不导入 `.env`，模型、Qdrant、RAG 构建及外部对象存储保持关闭。
