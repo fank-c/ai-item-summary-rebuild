@@ -35,3 +35,74 @@ CREATE TABLE IF NOT EXISTS `file_asset` (
 ) ENGINE = InnoDB
   DEFAULT CHARACTER SET = utf8mb4
   COLLATE = utf8mb4_unicode_ci;
+
+-- 知识库四张核心表，支持基础持久化与内部服务，尚未接入 RAG；字段说明见 docs/reference/database/knowledge.md。
+-- 此脚本用于初始化，不会升级同名旧表、复制历史数据或操作向量库。时间统一采用 UTC。
+CREATE TABLE IF NOT EXISTS `knowledge_base` (
+    `id` VARCHAR(32) NOT NULL COMMENT '知识库 ID',
+    `name` VARCHAR(100) NOT NULL COMMENT '知识库名称',
+    `status` INT NOT NULL DEFAULT 1 COMMENT '1 表示可用',
+    `create_at` DATETIME(6) NOT NULL,
+    `update_at` DATETIME(6) NOT NULL,
+    PRIMARY KEY (`id`)
+) ENGINE = InnoDB
+  DEFAULT CHARACTER SET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `knowledge_document` (
+    `id` VARCHAR(32) NOT NULL COMMENT '知识文档 ID',
+    `knowledge_base_id` VARCHAR(32) NOT NULL COMMENT '所属知识库 ID',
+    `file_id` VARCHAR(32) NOT NULL COMMENT '已上传的 file_asset ID',
+    `status` INT NOT NULL DEFAULT 1 COMMENT '文档可用状态，1 表示可用',
+    `index_status` VARCHAR(16) NOT NULL COMMENT '索引状态：pending/indexed/failed/removed',
+    `active_revision_id` VARCHAR(32) NULL COMMENT '当前可查询的完整版本；重建失败时保留旧值',
+    `last_failure_code` VARCHAR(64) NULL COMMENT '最近一次构建失败编码',
+    `last_failure_message` VARCHAR(512) NULL COMMENT '最近一次构建失败的脱敏摘要',
+    `create_at` DATETIME(6) NOT NULL,
+    `update_at` DATETIME(6) NOT NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_knowledge_document_base_file` (`knowledge_base_id`, `file_id`),
+    KEY `idx_knowledge_document_file` (`file_id`)
+) ENGINE = InnoDB
+  DEFAULT CHARACTER SET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `knowledge_document_revision` (
+    `id` VARCHAR(32) NOT NULL COMMENT '一次构建产生的版本 ID',
+    `knowledge_document_id` VARCHAR(32) NOT NULL COMMENT '所属知识文档 ID',
+    `revision_number` INT NOT NULL COMMENT '同一文档内递增的版本号',
+    `revision_status` VARCHAR(24) NOT NULL COMMENT 'building/ready/failed/superseded',
+    `source_sha256` CHAR(64) NULL COMMENT '本次实际读取源文件的 SHA-256',
+    `chunk_count` INT NOT NULL DEFAULT 0 COMMENT '本版本生成的片段数量',
+    `failure_stage` VARCHAR(64) NULL COMMENT '失败发生的处理阶段',
+    `failure_code` VARCHAR(64) NULL COMMENT '失败编码',
+    `failure_message` VARCHAR(512) NULL COMMENT '失败的脱敏摘要',
+    `created_at` DATETIME(6) NOT NULL,
+    `started_at` DATETIME(6) NOT NULL,
+    `completed_at` DATETIME(6) NULL,
+    `published_at` DATETIME(6) NULL COMMENT '发布为当前版本的时间',
+    `cleaned_at` DATETIME(6) NULL COMMENT '派生片段和向量清理完成时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_knowledge_revision_document_number` (`knowledge_document_id`, `revision_number`),
+    KEY `idx_knowledge_revision_document_status` (`knowledge_document_id`, `revision_status`)
+) ENGINE = InnoDB
+  DEFAULT CHARACTER SET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `knowledge_chunk` (
+    `id` VARCHAR(32) NOT NULL COMMENT '片段 ID；向量关联使用同一业务标识',
+    `revision_id` VARCHAR(32) NOT NULL COMMENT '所属构建版本 ID',
+    `sequence_no` INT NOT NULL COMMENT '同一版本内从 0 开始的片段序号',
+    `content` MEDIUMTEXT NOT NULL COMMENT '片段正文',
+    `heading_path` JSON NULL COMMENT '有序标题路径，例如 [{"level":1,"title":"说明"}]',
+    `token_count` INT NULL COMMENT '所用分词器的计数；无法确定时为空',
+    `start_offset` INT NULL COMMENT '处理后全文中的 UTF-16 起始偏移；无法可靠映射时为空',
+    `end_offset` INT NULL COMMENT 'UTF-16 结束偏移，不包含该位置；与起始偏移同时为空或有值',
+    `page_start` INT NULL COMMENT '来源起始页，从 1 开始；未知时为空',
+    `page_end` INT NULL COMMENT '来源结束页，包含该页；未知时为空',
+    `create_at` DATETIME(6) NOT NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_knowledge_chunk_revision_sequence` (`revision_id`, `sequence_no`)
+) ENGINE = InnoDB
+  DEFAULT CHARACTER SET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci;
