@@ -2,7 +2,7 @@ package com.item.aisummary.infrastructure.file.storage;
 
 import com.item.aisummary.application.file.port.ObjectStorageClient;
 import com.item.aisummary.application.file.port.ObjectStorageException;
-import com.item.aisummary.infrastructure.file.FileProperties;
+import com.item.aisummary.infrastructure.file.config.FileProperties;
 import io.minio.*;
 import io.minio.http.Method;
 import okhttp3.OkHttpClient;
@@ -18,6 +18,7 @@ public final class MinioObjectStorageClient implements ObjectStorageClient, Auto
 
     public static MinioObjectStorageClient create(FileProperties.Storage properties) {
         var minio = properties.minio();
+        // 配置约束各阶段超时，不代表整个流处理的总时限；禁用连接失败时的自动重试。
         var http = new OkHttpClient.Builder()
             .connectTimeout(FileProperties.timeoutMillis(properties.connectTimeout()), TimeUnit.MILLISECONDS)
             .readTimeout(FileProperties.timeoutMillis(properties.readTimeout()), TimeUnit.MILLISECONDS)
@@ -33,11 +34,13 @@ public final class MinioObjectStorageClient implements ObjectStorageClient, Auto
 
     @Override public void putObject(String bucket, String key, String mime, long size, String sha256, InputStream stream) {
         try {
+            // 明确传入实际大小；SHA-256 作为元数据保存，不发起上传后的远端核对。
             client.putObject(PutObjectArgs.builder().bucket(bucket).object(key).contentType(mime)
                 .userMetadata(Map.of("sha256", sha256)).stream(stream, size, -1).build());
         } catch (Exception exception) { throw failure("上传", exception); }
     }
     @Override public InputStream openObject(String bucket, String key) {
+        // SDK 响应流直接交给上层，关闭它才能释放底层 HTTP 资源。
         try { return client.getObject(GetObjectArgs.builder().bucket(bucket).object(key).build()); }
         catch (Exception exception) { throw failure("读取", exception); }
     }
@@ -51,6 +54,7 @@ public final class MinioObjectStorageClient implements ObjectStorageClient, Auto
         try { client.removeObject(RemoveObjectArgs.builder().bucket(bucket).object(key).build()); }
         catch (Exception exception) { throw failure("删除", exception); }
     }
+    // Spring 容器销毁适配器时关闭共享客户端，不代替逐个关闭内容流。
     @Override public void close() throws Exception { client.close(); }
     private static ObjectStorageException failure(String operation, Exception cause) {
         return new ObjectStorageException("MinIO 对象" + operation + "失败", cause);

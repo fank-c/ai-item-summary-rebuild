@@ -1,12 +1,12 @@
 package com.item.aisummary.infrastructure.file.storage;
 
+import com.item.aisummary.application.file.port.ObjectStorageClient;
+import com.item.aisummary.application.file.port.ObjectStorageException;
+import com.item.aisummary.infrastructure.file.config.FileProperties;
 import com.aliyun.oss.ClientBuilderConfiguration;
 import com.aliyun.oss.OSS;
 import com.aliyun.oss.OSSClientBuilder;
 import com.aliyun.oss.model.ObjectMetadata;
-import com.item.aisummary.application.file.port.ObjectStorageClient;
-import com.item.aisummary.application.file.port.ObjectStorageException;
-import com.item.aisummary.infrastructure.file.FileProperties;
 import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -23,6 +23,7 @@ public final class AliyunOssObjectStorageClient implements ObjectStorageClient, 
     public static AliyunOssObjectStorageClient create(FileProperties.Storage properties) {
         var aliyun = properties.aliyun();
         var config = new ClientBuilderConfiguration();
+        // OSS 没有独立写入超时；连接等待复用连接超时，不额外引入重试层。
         config.setConnectionTimeout(FileProperties.timeoutMillis(properties.connectTimeout()));
         config.setConnectionRequestTimeout(FileProperties.timeoutMillis(properties.connectTimeout()));
         config.setSocketTimeout(FileProperties.timeoutMillis(properties.readTimeout()));
@@ -32,6 +33,7 @@ public final class AliyunOssObjectStorageClient implements ObjectStorageClient, 
     }
     @Override public void putObject(String bucket, String key, String mime, long size, String sha256, InputStream stream) {
         var metadata = new ObjectMetadata();
+        // 使用应用核验后的大小和摘要；SHA-256 写入元数据，不作为远端内容核对。
         metadata.setContentLength(size); metadata.setContentType(mime); metadata.setUserMetadata(Map.of("sha256", sha256));
         try { client.putObject(bucket, key, stream, metadata); }
         catch (Exception exception) { throw failure("上传", exception); }
@@ -39,6 +41,7 @@ public final class AliyunOssObjectStorageClient implements ObjectStorageClient, 
     @Override public InputStream openObject(String bucket, String key) {
         try {
             var object = client.getObject(bucket, key);
+            // 调用者拿到流后拥有释放责任；重复关闭只释放一次 SDK 对象。
             return new FilterInputStream(object.getObjectContent()) {
                 private boolean closed;
                 @Override public void close() throws IOException {
@@ -59,6 +62,7 @@ public final class AliyunOssObjectStorageClient implements ObjectStorageClient, 
         try { client.deleteObject(bucket, key); }
         catch (Exception exception) { throw failure("删除", exception); }
     }
+    // Spring 关闭容器时释放共享 SDK 客户端，单个内容流的释放由其调用者负责。
     @Override public void close() { client.shutdown(); }
     private static ObjectStorageException failure(String operation, Exception cause) {
         return new ObjectStorageException("OSS 对象" + operation + "失败", cause);

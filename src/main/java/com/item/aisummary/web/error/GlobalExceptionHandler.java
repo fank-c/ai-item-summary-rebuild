@@ -2,12 +2,12 @@ package com.item.aisummary.web.error;
 
 import com.item.aisummary.application.auth.AuthenticationRequiredException;
 import com.item.aisummary.application.file.port.ObjectStorageException;
-import com.item.aisummary.domain.file.FileNotFoundException;
-import com.item.aisummary.domain.file.FileValidationException;
+import com.item.aisummary.domain.file.exception.FileNotFoundException;
+import com.item.aisummary.domain.file.exception.FileValidationException;
+import com.item.aisummary.domain.user.exception.UserNotFoundException;
+import com.item.aisummary.infrastructure.web.RequestIdFilter;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartException;
-import com.item.aisummary.domain.user.UserNotFoundException;
-import com.item.aisummary.infrastructure.web.RequestIdFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;

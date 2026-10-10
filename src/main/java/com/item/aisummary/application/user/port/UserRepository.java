@@ -1,6 +1,6 @@
 package com.item.aisummary.application.user.port;
 
-import com.item.aisummary.domain.user.User;
+import com.item.aisummary.domain.user.model.User;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -11,7 +11,11 @@ public interface UserRepository {
     User insert(User user);
     Optional<User> findById(String id);
     List<User> findAll();
-    /** 仅更新资料和更新时间；passwordChanged=false 时不写 password 列。 */
+    /**
+     * 只更新未删除记录的 name、email、update_at，以及明确要求修改的 password。
+     * 不写 id、status、create_at、deleted_at；返回行数供服务检查是否恰好写入一行。
+     * passwordChanged=false 时 SQL 必须完全省略 password 列，不能写回快照中的旧摘要。
+     */
     int update(User user, boolean passwordChanged);
     /** 删除时间由数据库生成，更新时间由调用方提供，不改变账户 status。 */
     int softDelete(String id, Instant updateAt);

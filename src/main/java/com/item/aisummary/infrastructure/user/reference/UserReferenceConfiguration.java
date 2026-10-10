@@ -1,8 +1,8 @@
 package com.item.aisummary.infrastructure.user.reference;
 
-import com.item.aisummary.application.user.UserService;
 import com.item.aisummary.application.user.reference.UserReferenceService;
-import com.item.aisummary.infrastructure.auth.MockAuthenticationProperties;
+import com.item.aisummary.application.user.service.UserService;
+import com.item.aisummary.infrastructure.auth.config.MockAuthenticationProperties;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;

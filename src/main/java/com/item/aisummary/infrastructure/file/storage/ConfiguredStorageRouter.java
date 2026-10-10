@@ -2,8 +2,8 @@ package com.item.aisummary.infrastructure.file.storage;
 
 import com.item.aisummary.application.file.port.ObjectStorageClient;
 import com.item.aisummary.application.file.port.ObjectStorageRouter;
-import com.item.aisummary.domain.file.FileValidationException;
-import com.item.aisummary.infrastructure.file.FileProperties;
+import com.item.aisummary.domain.file.exception.FileValidationException;
+import com.item.aisummary.infrastructure.file.config.FileProperties;
 import java.util.Map;
 
 /** 仅接受明确启用的 minio/aliyun；不自动选择其他厂商。 */

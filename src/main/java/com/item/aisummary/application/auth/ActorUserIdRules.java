@@ -10,6 +10,7 @@ public final class ActorUserIdRules {
         if (actorUserId == null || actorUserId.isBlank()) {
             throw new IllegalArgumentException("用户 ID 不能为空");
         }
+        // 补充平面字符占两个 UTF-16 单元，但在身份长度规则中只计一个码点。
         if (actorUserId.codePointCount(0, actorUserId.length()) > MAX_CHARACTERS) {
             throw new IllegalArgumentException("用户 ID 长度不能超过 64 个字符");
         }
