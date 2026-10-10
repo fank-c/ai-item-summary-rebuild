@@ -6,14 +6,26 @@ import com.item.aisummary.domain.file.exception.FileValidationException;
 import com.item.aisummary.infrastructure.file.config.FileProperties;
 import java.util.Map;
 
-/** 仅接受明确启用的 minio/aliyun；不自动选择其他厂商。 */
+/** 仅接受明确启用的 minio/aliyun，不自动选择其他厂商或回退配置。 */
 public final class ConfiguredStorageRouter implements ObjectStorageRouter {
     private final FileProperties properties;
     private final Map<String, ObjectStorageClient> clients;
-    public ConfiguredStorageRouter(FileProperties properties, Map<String, ObjectStorageClient> clients) {
-        this.properties = properties; this.clients = Map.copyOf(clients);
+
+    public ConfiguredStorageRouter(
+            FileProperties properties, Map<String, ObjectStorageClient> clients) {
+        this.properties = properties;
+        this.clients = Map.copyOf(clients);
     }
-    @Override public StorageTarget resolve(String type) {
+
+    /**
+     * 根据请求的存储类型路由到已启用的存储适配器。
+     *
+     * @param type 存储类型（"minio" 或 "aliyun"）
+     * @return 目标存储桶与客户端
+     * @throws FileValidationException 存储类型非法或目标存储未启用
+     */
+    @Override
+    public StorageTarget resolve(String type) {
         var config = properties.storage();
         if ("minio".equals(type) && config.minio().enabled() && clients.containsKey("minio")) {
             return new StorageTarget(config.minio().bucket(), clients.get("minio"));

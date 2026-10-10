@@ -6,5 +6,4 @@ import org.apache.ibatis.annotations.Mapper;
 
 /** 用户表 Mapper，常规查询由 MyBatis-Plus 附加 deleted_at IS NULL。 */
 @Mapper
-public interface UserMapper extends BaseMapper<UserEntity> {
-}
+public interface UserMapper extends BaseMapper<UserEntity> {}
