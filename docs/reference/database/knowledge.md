@@ -1,0 +1,120 @@
+# 知识库表结构
+
+知识库基础使用 `knowledge_base`、`knowledge_document`、`knowledge_document_revision`、`knowledge_chunk` 四张表，支持知识库创建与改名、文件登记、building 版本创建和片段批次保存及查询。当前没有知识库 HTTP、权限、版本发布或 RAG 构建流程。
+
+返回 [文档导航](../../README.md)。内部调用合同见 [知识库模块](../../modules/knowledge.md)，初始化步骤见 [运行指南](../../guides/getting-started.md)，验证方式见 [测试说明](../../guides/testing.md)。
+
+正式定义以 [schema.sql](../../../deploy/mysql/schema.sql) 为准，H2 定义见 [测试 schema](../../../src/test/resources/schema.sql)。两者同步维护字段、可空性、主键、唯一约束和普通索引。MySQL 使用 `DATETIME(6)`，H2 使用 `TIMESTAMP(6)`；时间按 UTC 解释。
+
+## 数据关系
+
+```text
+knowledge_base
+  └── knowledge_document ── file_id → file_asset
+        ├── knowledge_document_revision
+        │     └── knowledge_chunk
+        └── active_revision_id → 当前可查询的完整版本（可空）
+```
+
+- 知识库只保存自身信息，不记录用户归属，允许多库同名。
+- 知识文档表示文件与知识库的登记关系，同一知识库不能重复登记同一文件。
+- 一个文档可以有多个版本，一个版本可以有多个片段。
+- 片段 ID 是 32 位业务 UUID。未来向量关联使用该业务标识，厂商协议转换由存储适配负责；当前没有向量写入。
+
+表间采用逻辑关联，没有物理外键或级联删除。应用服务检查知识库、文档和版本是否存在，并通过文件模块检查源文件归属。当前服务不修改活动版本指针；未来发布用例还需确认目标版本属于同一文档且已完整可用。
+
+## 字段定义
+
+以下类型为正式 MySQL 类型。“可空”描述数据库约束；非空白、位置范围等额外规则由领域和应用服务校验。
+
+### knowledge_base
+
+| 字段 | 类型 | 可空 | 含义与约束 |
+| --- | --- | --- | --- |
+| `id` | VARCHAR(32) | 否 | 知识库 ID，主键 |
+| `name` | VARCHAR(100) | 否 | 展示名称；服务 trim 后非空白且最多 100 个 Java 字符，允许同名 |
+| `status` | INT | 否 | 可用状态，默认 1 |
+| `create_at`、`update_at` | DATETIME(6) | 否 | 创建与修改时间 |
+
+表中没有 `owner_user_id`，也没有每个用户只能拥有一个知识库的限制。访问关系需要后续独立权限能力处理；缺少所有者字段不能解释为所有用户均可访问，源文件归属也不能代替知识库授权。
+
+### knowledge_document
+
+| 字段 | 类型 | 可空 | 含义与约束 |
+| --- | --- | --- | --- |
+| `id` | VARCHAR(32) | 否 | 知识文档 ID，主键 |
+| `knowledge_base_id`、`file_id` | VARCHAR(32) | 否 | 所属知识库和源文件；联合唯一 |
+| `status` | INT | 否 | 文档可用状态，默认 1 |
+| `index_status` | VARCHAR(16) | 否 | pending、indexed、failed、removed；登记时为 pending，不表示后台任务进度 |
+| `active_revision_id` | VARCHAR(32) | 是 | 当前可查询的完整版本；尚无成功版本时为空 |
+| `last_failure_code` | VARCHAR(64) | 是 | 最近一次构建失败编码 |
+| `last_failure_message` | VARCHAR(512) | 是 | 最近一次构建失败的脱敏摘要 |
+| `create_at`、`update_at` | DATETIME(6) | 否 | 创建与修改时间 |
+
+当前登记创建 pending 文档，活动版本与失败摘要为空。创建版本和保存片段均不更新这些文档结果字段。未来发布或重建失败处理应保留旧的可用活动版本；仍有旧可用版本时保持 indexed，失败摘要单独记录，不能将一次重建失败等同于全部知识失效。
+
+### knowledge_document_revision
+
+| 字段 | 类型 | 可空 | 含义与约束 |
+| --- | --- | --- | --- |
+| `id` | VARCHAR(32) | 否 | 版本 ID，主键 |
+| `knowledge_document_id` | VARCHAR(32) | 否 | 所属文档 ID |
+| `revision_number` | INT | 否 | 文档内递增版本号，与文档 ID 联合唯一；服务从 1 开始分配 |
+| `revision_status` | VARCHAR(24) | 否 | building、ready、failed、superseded；表示版本整体状态 |
+| `source_sha256` | CHAR(64) | 是 | 实际读取源文件的 SHA-256；当前创建版本时为空 |
+| `chunk_count` | INT | 否 | 本版本片段数量，默认 0；成功追加后更新为数据库中的实际总数 |
+| `failure_stage`、`failure_code` | VARCHAR(64) | 是 | 失败发生的阶段与编码 |
+| `failure_message` | VARCHAR(512) | 是 | 失败的脱敏摘要 |
+| `created_at`、`started_at` | DATETIME(6) | 否 | 创建和进入 building 的时间 |
+| `completed_at`、`published_at` | DATETIME(6) | 是 | 完成和发布时间 |
+| `cleaned_at` | DATETIME(6) | 是 | 派生片段和向量清理完成时间 |
+
+版本创建只分配 building 记录，不执行任务或构建。`created_at` 与 `started_at` 取同一次创建时间，完成、发布、清理时间与失败信息为空。版本是否当前可查询由文档的活动版本指针决定，不能只看版本状态。
+
+版本表保存整体结果、失败摘要、源文件摘要、数量和时间，不保存解析策略、切片策略及参数、规范化策略、质量状态、向量路由或阶段进度 JSON。片段表也不保存切片策略，因此无法从历史版本还原当时的处理参数。未来接入或更换向量模型、集合时，应另行判断兼容性和索引重建需求，不能假定不同模型的向量可混用。
+
+没有独立的清理状态字段。`cleaned_at` 为空不区分未清理、无需清理或清理失败；当前服务不执行清理。
+
+### knowledge_chunk
+
+| 字段 | 类型 | 可空 | 含义与约束 |
+| --- | --- | --- | --- |
+| `id` | VARCHAR(32) | 否 | 片段 ID，主键 |
+| `revision_id` | VARCHAR(32) | 否 | 所属版本 |
+| `sequence_no` | INT | 否 | 非负片段序号，与版本 ID 联合唯一；不要求连续 |
+| `content` | MEDIUMTEXT | 否 | 正文；服务要求非空白，保存时保留原样 |
+| `heading_path` | JSON | 是 | 有序标题路径，例如 `[{"level":1,"title":"说明"}]` |
+| `token_count` | INT | 是 | 调用方提供的分词数量；有值时非负 |
+| `start_offset`、`end_offset` | INT | 是 | 处理后全文中的 UTF-16 半开区间，结束位置不包含在内 |
+| `page_start`、`page_end` | INT | 是 | 来源页码，起始页从 1 开始，结束页包含在范围内 |
+| `create_at` | DATETIME(6) | 否 | 创建时间 |
+
+标题按原顺序保存，层级为正、标题非空白。JSON NULL 和空数组分别还原，不把 JSON 数组保存为字符串；MySQL 与 H2 的绑定方式见 [知识库模块](../../modules/knowledge.md#字段位置与时间)。
+
+偏移必须同时为空或满足 `0 <= start_offset < end_offset`；页码必须同时为空或满足 `1 <= page_start <= page_end`。这些规则由领域及内部服务校验，正式 schema 不增加 SQL CHECK 约束。全文偏移不受当前片段正文长度限制；Token 数也不保证等于未来 Embedding 模型的实际 Token 数。
+
+未知位置保持为空，不从父章节复制范围后宣称是子片段的精确范围。Spring AI 继承 metadata 不会自动生成可靠的原文偏移。当前偏移不表示原文件字节位置或 PDF 坐标，四表也未保存用于定位的完整处理后文本、OCR 区域或 Word 段落位置。需要原文高亮时，应先明确参考文本保存方式和解析器的位置输出。
+
+## 索引与写入约束
+
+四张表均以 `id` 为主键，另有以下索引：
+
+| 表 | 索引 | 类型与字段 |
+| --- | --- | --- |
+| `knowledge_document` | `uk_knowledge_document_base_file` | 唯一：`knowledge_base_id, file_id` |
+| `knowledge_document` | `idx_knowledge_document_file` | 普通：`file_id` |
+| `knowledge_document_revision` | `uk_knowledge_revision_document_number` | 唯一：`knowledge_document_id, revision_number` |
+| `knowledge_document_revision` | `idx_knowledge_revision_document_status` | 普通：`knowledge_document_id, revision_status` |
+| `knowledge_chunk` | `uk_knowledge_chunk_revision_sequence` | 唯一：`revision_id, sequence_no` |
+
+文档登记、版本分配和片段追加均由唯一索引兜底。版本号采用 MAX + 1，竞争时明确报冲突，不自动重试；达到 int 上限时拒绝继续分配。片段只允许追加到 building 版本，插入和总数更新在同一个 READ_COMMITTED 事务中，锁定目标版本以串行执行同版本批次，失败整批回滚。具体异常与外层事务要求见 [知识库模块](../../modules/knowledge.md#版本与片段事务)。
+
+## 初始化与验证边界
+
+应用不自动建表。在明确选定的 MySQL 数据库中手动执行 `SOURCE deploy/mysql/schema.sql;`。`CREATE TABLE IF NOT EXISTS` 只创建缺失表，不会删除旧列、调整可空性或升级已有表。
+
+旧库升级与历史数据导入需要单独处理。导入时应核实 DATETIME 原时区，并保持文档、版本、片段及向量的对应关系；采用新的解析或切片规则时，应安排索引重建，不能直接沿用旧实体和 Mapper。
+
+四表真实 Mapper 测试覆盖字段、唯一索引、JSON 数组顺序、可空位置和 UTC 微秒。内部服务测试覆盖关联与文件归属、版本竞争，以及片段排序、总数、并发追加和失败回滚。测试源码入口见 [知识库模块](../../modules/knowledge.md#测试与学习入口)。
+
+普通测试使用隔离 H2，不能替代正式 MySQL DDL、驱动或事务验收，也不能证明尚未实现的构建、发布、位置生成或检索流程可用。既有 `mysql-it` profile 只覆盖用户模块。
