@@ -26,14 +26,14 @@ mvn clean verify
 | 文件 HTTP 边界 | 身份、Key、数据库单边失败、真实容器 multipart 上限 | `FileAuthenticationHttpTest`、`FileKeyValidationHttpTest`、`FileFailureHttpTest`、`FileMultipartHttpTest` |
 | 存储与装配 | SDK 元数据、GET 签名、OSS 资源关闭、稳定异常、条件配置 | `StorageAdapterTest`、`FileConfigurationTest` |
 | 公共错误 | 不支持的 Content-Type 返回 415、响应字段、协议头和请求标识 | `GlobalExceptionHandlerHttpTest` |
-| 知识库领域与持久化 | 位置规则、四表真实 Mapper、联合唯一约束、标题 JSON、可空字段与 UTC 微秒 | `KnowledgeRulesTest`、`KnowledgePersistenceTest` |
+| 知识库领域与持久化 | 位置规则、四表 MyBatis Mapper/H2、联合唯一约束、标题 JSON、可空字段与 UTC 微秒 | `KnowledgeRulesTest`、`KnowledgePersistenceTest` |
 | 知识库内部用例 | 多库同名、改名、文档关联与文件归属、版本递增及并发唯一冲突 | `KnowledgeServicesTest` |
 | 知识片段事务 | 追加、排序、实际计数、非 building 拒绝、半批失败和计数更新失败回滚、并发追加 | `KnowledgeChunkServiceTest` |
-| RAG 内容与适配 | txt/md Reader、UTF-8、短内容、中文标点、分片上限、向量 UUID/元数据和过滤 | `SpringAiKnowledgeContentProcessorTest`、`SpringAiKnowledgeVectorIndexTest` |
-| RAG 生命周期与编排 | building 互斥、摘要、关闭流、批次失败、完整发布与回滚、当前和旧向量清理 | `KnowledgeBuildLifecycleServiceTest`、`KnowledgeIndexBuildServiceTest` |
-| RAG 配置 | 默认关闭、显式后端、缺少依赖、配置绑定及无外部调用的装配 | `KnowledgeRagConfigurationTest`、`AiItemSummaryEnvironmentTest` |
+| RAG 源读取与策略合同 | 原字节大小/SHA-256、流资源归属、parser/chunker 路由及数据合同 | `KnowledgeSourceReaderTest`、`KnowledgeProcessingContractsTest`、`KnowledgeProcessingRouterTest` |
+| RAG 编排与生命周期 | 替身策略、组式保存、全部角色上限、精确向量批次、仅 RETRIEVAL 向量化、发布/失败/清理和事务行为 | `KnowledgeIndexBuildServiceTest`、`KnowledgeChunkGroupsTest`、`KnowledgeBuildLifecycleServiceIntegrationTest` |
+| 向量适配与配置 | VectorStore 替身上的 UUID/metadata/过滤/安全异常；默认关闭、缺策略或依赖时拒绝启动 | `SpringAiKnowledgeVectorIndexTest`、`KnowledgeRagConfigurationTest`、`KnowledgeRagPropertiesTest` |
 
-[用户说明](../modules/user.md#测试与学习入口)、[文件说明](../modules/file.md#测试与学习入口) 和 [知识库说明](../modules/knowledge.md#测试与学习入口) 提供测试源码链接及对应规则。
+[用户说明](../modules/user.md#测试与学习入口)、[文件说明](../modules/file.md#测试与学习入口) 和 [知识库说明](../modules/knowledge.md#表结构配置与验证入口) 提供测试源码链接及对应规则。
 
 ## 定向运行
 
@@ -55,13 +55,13 @@ mvn -Dtest=FileRulesTest,FileServiceTest,FileKeyValidationHttpTest test
 mvn -Dtest=KnowledgeRulesTest,KnowledgePersistenceTest,KnowledgeServicesTest,KnowledgeChunkServiceTest test
 ```
 
-只检查 txt/md 入库与发布时：
+检查固定构建编排、组式保存与发布时：
 
 ```bash
-mvn -Dtest=SpringAiKnowledgeContentProcessorTest,SpringAiKnowledgeVectorIndexTest,KnowledgeBuildLifecycleServiceTest,KnowledgeIndexBuildServiceTest,KnowledgeRagConfigurationTest test
+mvn -Dtest=KnowledgeSourceReaderTest,KnowledgeProcessingContractsTest,KnowledgeProcessingRouterTest,SpringAiKnowledgeVectorIndexTest,KnowledgeChunkGroupsTest,KnowledgeBuildLifecycleServiceIntegrationTest,KnowledgeIndexBuildServiceTest,KnowledgeRagConfigurationTest,KnowledgeRagPropertiesTest test
 ```
 
-真实 Reader/Splitter 在本地运行；向量边界使用记录输入的替身，不访问模型或 Qdrant。发布 SQL 失败使用 H2 临时 CHECK 约束注入，不修改生产规则。
+构建编排的 parser/chunker 和 VectorStore 均使用替身；不测试生产 Reader/Splitter，也不进行真实解析、切分、OpenAI 或 Qdrant 调用。发布 SQL 失败使用 H2 临时 CHECK 约束注入，不修改生产规则。
 
 片段失败回滚测试直接调用 Spring 装配的服务，测试本身不包事务。唯一冲突和 SQL 失败后重新查询已提交数据，检查没有留下部分片段或错误计数；另外验证不兼容外层事务被拒绝、兼容外层事务共同回滚。测试用 CHECK 约束只存在于独立 H2 中，不写入正式 schema。
 
@@ -97,19 +97,11 @@ mvn -Pmysql-it verify
 
 缺 URL、账户或库名不符合要求时会失败。该验收覆盖用户模块，不等于文件或知识库模块的真实 MySQL 验证，也不等于对象存储验收。
 
-## 真实 RAG 验收
+## 当前 RAG 验收边界
 
-当前没有自动外部 RAG 验收 profile。专用 MySQL、Qdrant 集合与 OpenAI 凭据准备完成后，从 Spring 注入组件调用内部构建服务，按 [运行指南](./getting-started.md#6-启用-txtmd-入库) 启用。该流程没有公开知识库 HTTP。
+当前没有生产 parser/chunker，也没有可执行的真实 RAG 端到端验收流程。不要按变量配置后声称 txt/md 入库可用；RAG 显式开启会因为策略缺失而拒绝启动。新增真实解析/切分策略与外部验收需作为后续独立实现和验证任务。当前可验证范围仅为固定编排、策略替身、H2 生命周期/组保存和 VectorStore 替身合同。
 
-1. 在专用测试库准备独立知识库和已上传 txt/md 文件，用相同显式身份登记并构建。
-2. 核对 MySQL 片段数、连续序号、Qdrant 点数和全部来源元数据。点 ID 去除连字符后应等于数据库片段 ID。
-3. 核对 Markdown 正文、引用、代码与水平线边界；标题路径、Token 数和位置仍为空。
-4. 重建同一文档，确认新指针、ready/published_at 和旧 superseded；按当前 revision 过滤 Qdrant，旧向量不能进入活动结果。
-5. 注入 Embedding 或 Qdrant 写入失败，确认本次 revision failed、旧指针保留，清理仅匹配失败 revision；另外验证清理失败不填写 cleaned_at。
-6. 核对旧版本清理失败时新活动版本保留，构建结果明确报告旧清理未完成。
-7. 只清理本次验收创建的数据库记录、向量、上传对象与专用临时资源，不清空共享集合或业务表。
-
-没有凭据或外部后端时，明确报告未执行 MySQL/OpenAI/Qdrant 实际连接与协议验收。H2、配置装配和 VectorStore 替身的结果不等于外部验收通过。后续检索实现仍需单独验证活动版本过滤，本次测试只检查入库元数据与删除过滤合同。
+RAG 真实验收至少待补：生产 parser 的格式/UTF-8/结构与来源位置验证、生产 FLAT 及可选 PARENT_CHILD chunker 的边界与质量验证、真实 MySQL、OpenAI Embedding 和 Qdrant 协议/元数据/失败清理验收，以及活动版本检索过滤（检索本身目前不存在）。在这些实现和后端准备前，不配置个人凭据、不创建验收资源，也不把 H2 或 Mock 结果描述为真实服务验收。
 
 ## 验证结论的边界
 
@@ -117,7 +109,7 @@ mvn -Pmysql-it verify
 | --- | --- | --- |
 | 普通 H2 测试 | 测试环境中的行为与 Mapper SQL 合同 | MySQL 方言及真实连接 |
 | SDK Mock、内存存储与离线签名 | 调用参数、资源释放、异常转换和签名生成 | 真实 Bucket 的权限、上传下载删除 |
-| 本地 Reader/Splitter、H2 与向量替身 | 解析、切分、入库编排、发布和失败合同 | OpenAI/Qdrant 实际协议、权限与外部一致性 |
+| 策略替身、H2 与 VectorStore 替身 | 固定编排、分组保存、生命周期和适配器输入合同 | 真实解析/切分、OpenAI/Qdrant 协议、权限与外部一致性 |
 | `GET /api/health` | HTTP 服务启动并可达 | 数据库、模型及对象存储可用性 |
 | `mvn -DskipTests clean verify` | 编译和打包 | 测试行为是否通过 |
 | `mvn -Pmysql-it verify` 成功 | 配置的专用 MySQL 用户生命周期 | 文件存储、模型及其他外部能力 |

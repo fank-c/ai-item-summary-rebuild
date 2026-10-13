@@ -30,7 +30,8 @@ public interface KnowledgeDocumentRepository {
     /**
      * 在数据库事务内使用排他锁（FOR UPDATE）查询指定知识文档。
      *
-     * <p>同文档的构建创建、失败记录和版本发布等生命周期操作必须先取得此锁，以避免并发修改。
+     * <p>必须处于 READ_COMMITTED 事务，基础设施核对实际连接隔离级别；
+     * 同文档的构建创建、失败记录和版本发布必须先取得此锁，以避免并发修改和旧快照。
      *
      * @param id 文档唯一标识（32 位 UUID）
      * @return 包含已加锁文档实体的 Optional，不存在时为空

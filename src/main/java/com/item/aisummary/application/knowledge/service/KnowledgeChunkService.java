@@ -3,6 +3,8 @@ package com.item.aisummary.application.knowledge.service;
 import com.item.aisummary.application.knowledge.command.SaveKnowledgeChunkCommand;
 import com.item.aisummary.application.knowledge.port.KnowledgeChunkRepository;
 import com.item.aisummary.application.knowledge.port.KnowledgeRevisionRepository;
+import com.item.aisummary.application.knowledge.processing.ChunkDraft;
+import com.item.aisummary.application.knowledge.processing.ChunkGroupDraft;
 import com.item.aisummary.domain.knowledge.enums.ChunkRole;
 import com.item.aisummary.domain.knowledge.enums.RevisionStatus;
 import com.item.aisummary.domain.knowledge.exception.KnowledgeConflictException;
@@ -49,6 +51,62 @@ public class KnowledgeChunkService {
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public List<KnowledgeChunk> saveBatch(
+            String revisionId, List<SaveKnowledgeChunkCommand> commands) {
+        return savePreparedBatch(revisionId, commands);
+    }
+
+    /**
+     * 构建入口按完整组批量保存片段。
+     *
+     * <p>按“父块优先、子块在后”的规则分配版本内全局序号，各组之间绝不跨事务拆分；
+     * 内部复用严格的同版本父序号解析规则，并在单次 READ_COMMITTED 短事务中原子完成插入与版本总计数更新。
+     *
+     * @param revisionId 目标构建版本 ID
+     * @param firstSequenceNo 本批次起始的全局片段序号
+     * @param groups 分块组草稿列表（非空且各项有效）
+     * @return 实际插入持久化的片段实体列表（保持组与子块的对应顺序）
+     * @throws IllegalArgumentException 当序号溢出或输入草稿不符合约束时抛出
+     * @throws KnowledgeNotFoundException 当版本不存在时抛出
+     * @throws KnowledgeConflictException 当版本非 BUILDING 或序号冲突时抛出
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public List<KnowledgeChunk> saveGroups(
+            String revisionId, int firstSequenceNo, List<ChunkGroupDraft> groups) {
+        if (firstSequenceNo < 0 || groups == null || groups.isEmpty()
+                || groups.stream().anyMatch(group -> group == null)) {
+            throw new IllegalArgumentException("分块组和起始序号无效");
+        }
+        List<ChunkGroupDraft> input = List.copyOf(groups);
+        long total = input.stream().mapToLong(ChunkGroupDraft::chunkCount).sum();
+        if (total + firstSequenceNo > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("分块序号超出整数范围");
+        }
+        var commands = new ArrayList<SaveKnowledgeChunkCommand>();
+        int sequence = firstSequenceNo;
+        for (var group : input) {
+            Integer parentSequence = null;
+            if (group.context() != null) {
+                parentSequence = sequence;
+                commands.add(toCommand(group.context(), sequence++, ChunkRole.CONTEXT, null));
+            }
+            for (var child : group.retrievals()) {
+                commands.add(toCommand(child, sequence++, ChunkRole.RETRIEVAL, parentSequence));
+            }
+        }
+        return savePreparedBatch(revisionId, commands);
+    }
+
+    private static SaveKnowledgeChunkCommand toCommand(
+            ChunkDraft draft, int sequence, ChunkRole role, Integer parentSequence) {
+        var source = draft.source();
+        return new SaveKnowledgeChunkCommand(parentSequence, role, sequence, draft.content(),
+                draft.headingPath(), draft.tokenCount(),
+                source == null ? null : source.startOffset(), source == null ? null : source.endOffset(),
+                source == null ? null : source.pageStart(), source == null ? null : source.pageEnd());
+    }
+
+    /** 两个公开事务入口共享内部持久化核心，不依赖自身方法调用重新触发 Spring 事务。 */
+    private List<KnowledgeChunk> savePreparedBatch(
             String revisionId, List<SaveKnowledgeChunkCommand> commands) {
         String id = KnowledgeRules.requireId(revisionId, "版本 ID");
         List<SaveKnowledgeChunkCommand> input = validateCommands(commands);

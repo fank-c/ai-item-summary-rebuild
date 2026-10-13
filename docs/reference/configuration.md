@@ -58,9 +58,11 @@ SPRING_AI_MODEL_CHAT=none
 
 数据库时间使用 UTC。生产 `DATETIME(6)` 通过显式类型处理器映射为 `Instant`，没有内存数据库回退。
 
-## txt/md RAG 入库
+## RAG 构建配置
 
-三个开关需一起显式启用：构建为 true、Embedding 为 openai、向量存储为 qdrant。默认关闭，基础元数据与健康接口不需要模型或向量凭据。变量通过主配置映射到 Spring AI 2.0.1 的 Embedding 与 Qdrant 属性。
+RAG 构建默认关闭，基础元数据与健康接口不需要模型或向量凭据。启用时除 `APP_KNOWLEDGE_RAG_ENABLED=true` 外，还要求 Embedding=`openai`、向量存储=`qdrant`，并在应用中注册至少一个生产解析策略与 FLAT 分块策略；任何条件不满足都会拒绝启动。当前没有生产解析器或分块器，所以仅设置下表变量不会启用可用的 txt/md 入库。表中既有变量和默认值保持不变；分块相关参数当前只是交给未来策略的选项。
+
+变量通过主配置映射到 Spring AI 2.0.1 的 Embedding 与 Qdrant 属性。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -76,17 +78,17 @@ SPRING_AI_MODEL_CHAT=none
 | `QDRANT_API_KEY` | 空 | 按 Qdrant 部署要求本地提供 |
 | `QDRANT_COLLECTION_NAME` | `knowledge_chunks` | 向量集合；验收使用独立集合 |
 | `QDRANT_INITIALIZE_SCHEMA` | `false` | true 时创建缺失集合，不迁移已有集合维度 |
-| `RAG_BATCH_SIZE` | `128` | 每批保存与向量写入数量，范围 1～1024 |
-| `RAG_CHUNK_SIZE` | `512` | 正整数 Token 目标上限，超过输出粒度拒绝发布 |
-| `RAG_MIN_CHUNK_SIZE_CHARS` | `200` | 非负，控制标点截断条件，不是最终最短片段 |
-| `RAG_MIN_CHUNK_LENGTH_TO_EMBED` | `0` | 首版只允许 0，保留非空短正文 |
-| `RAG_MAX_NUM_CHUNKS` | `100000` | 正整数，全局片段上限；增加文件上限需重新评估 |
-| `RAG_KEEP_SEPARATOR` | `true` | 保留分隔符，无重叠窗口 |
-| `RAG_PUNCTUATION_MARKS` | `.?!;。？！；` 与换行 | 非空标点字符串；Properties 中 `\n` 表示换行 |
+| `RAG_BATCH_SIZE` | `128` | 范围 1～1024；数据库保存的目标组批大小、不拆分组；向量写入使用该精确批量上限，尾批可不足 |
+| `RAG_CHUNK_SIZE` | `512` | 正整数，作为分块策略选项传入；当前没有 Token 分块实现 |
+| `RAG_MIN_CHUNK_SIZE_CHARS` | `200` | 非负，作为分块策略选项传入；当前不执行标点切分 |
+| `RAG_MIN_CHUNK_LENGTH_TO_EMBED` | `0` | 当前只允许 0，作为策略选项；编排不据此过滤短块 |
+| `RAG_MAX_NUM_CHUNKS` | `100000` | 正整数，限制一个构建的全部角色片段总数（CONTEXT 与 RETRIEVAL 均计入） |
+| `RAG_KEEP_SEPARATOR` | `true` | 传递给策略；当前没有使用该选项的分块算法 |
+| `RAG_PUNCTUATION_MARKS` | `.?!;。？！；` 与换行 | 非空字符串，传递给策略；Properties 中 `\n` 表示换行 |
 
-TokenTextSplitter 编码固定 `CL100K_BASE`。读取大小上限复用 `APP_FILE_MAX_SIZE`，默认 20 MB，必须为正且小于 Integer.MAX_VALUE 字节。源文件固定 UTF-8，Markdown Reader 要求 JVM 默认字符集也是 UTF-8。
+原始源文件大小上限复用 `APP_FILE_MAX_SIZE`，默认 20 MB，必须为正且小于 Integer.MAX_VALUE 字节。当前 `KnowledgeSourceReader` 会将限量原字节预读到内存并校验大小和 SHA-256，不执行 UTF-8 解码；未来文本解析器需自行严格验证 UTF-8。当前没有生产 Reader、parser 或 splitter。
 
-构建参数不写入历史版本表，换模型、维度、集合或切片参数后必须评估重建与旧向量兼容性。普通测试关闭模型、Qdrant 和构建，不调用外部服务。调用与失败合同见 [知识库模块](../modules/knowledge.md)。
+两参数内部调用 `KnowledgeIndexBuildService.build(actorUserId,documentId)` 默认选择 FLAT；第三参数可显式指定 PARENT_CHILD。模式不对应环境变量，策略由应用注册；现在两种生产分块策略都不存在。固定编排将数据库片段按整组保存，组不会因达到 `RAG_BATCH_SIZE` 而拆开；向量只包括 RETRIEVAL 并使用精确批次上限。普通测试使用策略和 VectorStore 替身，不进行真实解析、切分或外部调用。合同与失败边界见[知识库模块](../modules/knowledge.md)。
 
 ## 模拟身份
 

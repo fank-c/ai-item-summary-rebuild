@@ -11,12 +11,16 @@ import com.item.aisummary.infrastructure.knowledge.persistence.mapper.KnowledgeD
 import com.item.aisummary.infrastructure.persistence.typehandler.UtcInstantTypeHandler;
 
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.jdbc.datasource.DataSourceUtils;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import javax.sql.DataSource;
 
 /**
  * 知识文档表的 MyBatis 持久化适配器。
@@ -26,9 +30,11 @@ import java.util.Optional;
 @Repository
 public class MyBatisKnowledgeDocumentRepository implements KnowledgeDocumentRepository {
     private final KnowledgeDocumentMapper mapper;
+    private final DataSource dataSource;
 
-    public MyBatisKnowledgeDocumentRepository(KnowledgeDocumentMapper mapper) {
+    public MyBatisKnowledgeDocumentRepository(KnowledgeDocumentMapper mapper, DataSource dataSource) {
         this.mapper = mapper;
+        this.dataSource = dataSource;
     }
 
     /**
@@ -114,13 +120,11 @@ public class MyBatisKnowledgeDocumentRepository implements KnowledgeDocumentRepo
      *
      * @param id 文档唯一标识
      * @return 包含已加锁实体的 Optional，不存在时为空
-     * @throws IllegalStateException 当当前线程未处于活动事务中时抛出
+     * @throws IllegalStateException 没有活动事务或实际隔离级别不是 READ_COMMITTED
      */
     @Override
     public Optional<KnowledgeDocument> findByIdForUpdate(String id) {
-        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
-            throw new IllegalStateException("文档锁必须在事务中使用");
-        }
+        requireReadCommittedTransaction();
         String locked = mapper.lockById(id);
         return locked == null ? Optional.empty() : findById(locked);
     }
@@ -156,6 +160,31 @@ public class MyBatisKnowledgeDocumentRepository implements KnowledgeDocumentRepo
                                 "update_at",
                                 updateAt,
                                 "typeHandler=" + UtcInstantTypeHandler.class.getName()));
+    }
+
+    /**
+     * 断言当前处于事务中且底层数据库连接的实际隔离级别严格为 READ_COMMITTED。
+     *
+     * <p>Spring 的 {@code Propagation.REQUIRED} 事务在加入已有外层事务时不会覆盖外层隔离级别；
+     * 若外层事务使用了更高隔离级别（如 REPEATABLE_READ），快照读可能导致构建阶段读取到已过期的
+     * 文档版本或活动指针。因此在加锁前直接检查底层物理连接的隔离级别。
+     *
+     * @throws IllegalStateException 当未处于活动事务中或隔离级别不是 READ_COMMITTED 时抛出
+     */
+    private void requireReadCommittedTransaction() {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("文档锁必须在事务中使用");
+        }
+        Connection connection = DataSourceUtils.getConnection(dataSource);
+        try {
+            if (connection.getTransactionIsolation() != Connection.TRANSACTION_READ_COMMITTED) {
+                throw new IllegalStateException("知识文档锁事务必须使用 READ_COMMITTED 隔离级别");
+            }
+        } catch (SQLException exception) {
+            throw new IllegalStateException("读取知识文档锁事务隔离级别失败", exception);
+        } finally {
+            DataSourceUtils.releaseConnection(connection, dataSource);
+        }
     }
 
     /** 将实体对象转换为领域对象。 */

@@ -109,6 +109,8 @@ class KnowledgePersistenceTest {
         assertThat(unknown.pageEnd()).isNull();
         assertThat(chunks.findById("empty-headings").orElseThrow().headingPath()).isEmpty();
         assertThat(chunks.countByRevisionId("revision")).isEqualTo(3);
+        assertThat(chunks.countByRevisionIdAndRole("revision", ChunkRole.CONTEXT)).isZero();
+        assertThat(chunks.countByRevisionIdAndRole("revision", ChunkRole.RETRIEVAL)).isEqualTo(3);
         assertThat(jdbc.queryForObject("SELECT create_at FROM knowledge_chunk WHERE id='chunk'", LocalDateTime.class))
             .isEqualTo(LocalDateTime.parse("2026-01-02T03:04:05.123456"));
     }
@@ -130,6 +132,9 @@ class KnowledgePersistenceTest {
             canonicalChunk("other-revision", "other", null, ChunkRole.RETRIEVAL, 1));
         assertThat(chunks.findByRevisionIdAndSequenceNo("revision", 9)).isEmpty();
         assertThat(chunks.countByRevisionId("revision")).isEqualTo(3);
+        assertThat(chunks.countByRevisionIdAndRole("revision", ChunkRole.CONTEXT)).isEqualTo(1);
+        assertThat(chunks.countByRevisionIdAndRole("revision", ChunkRole.RETRIEVAL)).isEqualTo(2);
+        assertThat(chunks.countByRevisionIdAndRole("other", ChunkRole.RETRIEVAL)).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT chunk_role FROM knowledge_chunk WHERE id='context'", String.class))
             .isEqualTo("CONTEXT");
         assertThat(jdbc.queryForObject("SELECT chunk_role FROM knowledge_chunk WHERE id='child'", String.class))
@@ -181,7 +186,7 @@ class KnowledgePersistenceTest {
         when(chunkMapper.insert(any(KnowledgeChunkEntity.class))).thenReturn(count);
         assertThatIllegalStateException().isThrownBy(() -> new MyBatisKnowledgeBaseRepository(baseMapper)
             .insert(new KnowledgeBase("base", "资料", 1, CREATED, CREATED)));
-        assertThatIllegalStateException().isThrownBy(() -> new MyBatisKnowledgeDocumentRepository(documentMapper)
+        assertThatIllegalStateException().isThrownBy(() -> new MyBatisKnowledgeDocumentRepository(documentMapper, mock(javax.sql.DataSource.class))
             .insert(document("document", "base", "file")));
         assertThatIllegalStateException().isThrownBy(() -> new MyBatisKnowledgeRevisionRepository(revisionMapper, mock(javax.sql.DataSource.class))
             .insert(revision("revision", "document", 1)));

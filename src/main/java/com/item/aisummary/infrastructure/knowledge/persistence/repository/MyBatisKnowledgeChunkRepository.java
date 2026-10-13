@@ -109,6 +109,25 @@ public class MyBatisKnowledgeChunkRepository implements KnowledgeChunkRepository
                 new QueryWrapper<KnowledgeChunkEntity>().eq("revision_id", revisionId));
     }
 
+    /**
+     * 统计指定版本中指定角色（CONTEXT 或 RETRIEVAL）的片段实际行数。
+     *
+     * @param revisionId 版本唯一标识
+     * @param role 片段用途角色（非空）
+     * @return 匹配该角色的片段总数
+     * @throws IllegalArgumentException 当角色为 null 时抛出
+     */
+    @Override
+    public long countByRevisionIdAndRole(String revisionId, ChunkRole role) {
+        if (role == null) {
+            throw new IllegalArgumentException("片段角色不能为空");
+        }
+        return mapper.selectCount(
+                new QueryWrapper<KnowledgeChunkEntity>()
+                        .eq("revision_id", revisionId)
+                        .eq("chunk_role", role.value()));
+    }
+
     /** 将实体对象转换为领域对象。 */
     private static KnowledgeChunk toDomain(KnowledgeChunkEntity entity) {
         return new KnowledgeChunk(

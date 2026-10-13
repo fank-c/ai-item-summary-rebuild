@@ -89,28 +89,16 @@ JAR 启动和 IDE 运行都应使用 Java 21，并把工作目录设为项目根
 
 IDE 中运行 `com.item.aisummary.AiItemSummaryApplication` 即可。配置不存在时应用仍可加载默认值，但用户、文件及知识库元数据操作需要有效数据库连接。
 
-## 6. 启用 txt/md 入库
+## 6. RAG 构建骨架状态
 
-先准备可用的 MySQL、已启用的文件对象存储和完成上传的 txt/md 文件。另准备 Qdrant gRPC 地址和专用集合，集合向量维度必须匹配 OpenAI Embedding 模型。
+当前应用实现了固定 RAG 编排和 Spring AI 向量适配，但没有生产文档解析器或分块器。默认 RAG 关闭；若只将开关设为 true，策略缺失会导致启动失败。即使补充 MySQL、对象存储、OpenAI 和 Qdrant 凭据，也不能仅靠配置启用真实 txt/md 入库；不要按外部验收流程创建资源或调用构建入口。
 
-在本地 `.env` 或进程环境中设置：
+应用合同包括原始字节限量预读与 SHA-256 校验、解析/分块策略 ports、可选 CONTEXT 与 RETRIEVAL 的组式保存、仅 RETRIEVAL 的向量批次及版本发布。预读器不执行 UTF-8 解码；文本解析器的 UTF-8 校验、txt/md 解析、FLAT/PARENT_CHILD 切分以及真实外部调用尚未实现或验收。`FileFormat` 中支持枚举也不代表有对应解析实现。
 
-```properties
-APP_KNOWLEDGE_RAG_ENABLED=true
-SPRING_AI_MODEL_EMBEDDING=openai
-SPRING_AI_VECTORSTORE_TYPE=qdrant
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
-QDRANT_COLLECTION_NAME=knowledge_chunks
-```
-
-本地提供 `OPENAI_EMBEDDING_API_KEY`（也可沿用 `OPENAI_API_KEY`）和需要的 Qdrant 凭据。`QDRANT_PORT` 默认 6334，是 gRPC 端口；按服务要求设置 TLS。模型维度可留空使用默认值，启用 `QDRANT_INITIALIZE_SCHEMA=true` 可以创建缺失集合，已有集合不会自动迁移维度。
-
-重新启动后，在 Spring 注入组件中调用 `KnowledgeIndexBuildService.build(actorUserId,knowledgeDocumentId)`。完整登记与构建示例见 [知识库模块](../modules/knowledge.md#内部调用方式)。该功能没有公开 HTTP 路径，不能通过上传接口自动触发。构建会自行创建版本，调用前不要手动创建 building。
-
-参数、批次与切分器默认值见 [RAG 配置](../reference/configuration.md#txtmd-rag-入库)。没有模型或 Qdrant 凭据时保持三个开关关闭；健康检查仍不探测这些后端。聊天模型可以独立保持关闭。
+内部两参数入口 `KnowledgeIndexBuildService.build(actorUserId,documentId)` 默认选择 FLAT；第三参数可指定 PARENT_CHILD，但必须注册对应策略。无新增环境变量控制模式。现有 RAG 环境变量和默认值、精确组/向量批次语义见 [配置说明](../reference/configuration.md#rag-构建配置)，完整合同见[知识库模块](../modules/knowledge.md)。
 
 ## 后续学习
 
-启用聊天模型时提供 `SPRING_AI_MODEL_CHAT=openai`、`OPENAI_API_KEY` 和需要的 `OPENAI_MODEL`。当前没有聊天用例；RAG 入库已实现，检索与问答尚未实现。
+启用聊天模型时提供 `SPRING_AI_MODEL_CHAT=openai`、`OPENAI_API_KEY` 和需要的 `OPENAI_MODEL`。当前没有聊天用例；RAG 固定编排与向量适配已实现，但解析、分块策略、检索与问答尚未实现。
 
 知识库内部调用见 [模块说明](../modules/knowledge.md)，现有四表见 [表结构说明](../reference/database/knowledge.md)。运行验证与真实 MySQL 用户验收见 [测试说明](./testing.md)。

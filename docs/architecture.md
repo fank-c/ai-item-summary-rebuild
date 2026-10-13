@@ -21,7 +21,7 @@ web ───────────────→ application ─────
 | `web` | Controller、请求校验、响应字段映射、HTTP 异常处理 | 不直接操作数据库或 SDK，不承载业务规则 |
 | `application` | 用户、文件与知识库用例、请求身份、跨模块引用及外部能力 port | 通过接口调用仓储、密码摘要或对象存储，不依赖其实现 |
 | `domain` | 用户数据与文本规则、文件归属、知识库记录与片段位置规则 | 不依赖 Spring、MyBatis 或供应商 SDK |
-| `infrastructure` | 构造器装配、MyBatis、BCrypt、模拟身份、存储 SDK 与知识库 Spring AI Reader/Splitter/Qdrant | 实现应用接口，处理外部协议、生命周期与异常转换 |
+| `infrastructure` | 构造器装配、MyBatis、BCrypt、模拟身份、存储 SDK 与知识库 Spring AI 向量适配 | 实现应用接口，处理外部协议、生命周期与异常转换；当前没有生产解析器/分块器 |
 
 `port` 是应用定义的外部能力接口。例：用户服务只认识 `PasswordHasher`，BCrypt 的具体编码器留在基础设施；文件服务只认识 `UploadSource`，MultipartFile 留在 Web 层。
 
@@ -38,7 +38,7 @@ web ───────────────→ application ─────
 | `web.health`、`web.error` | 保持单一职责 | 健康检查与公共异常转换 |
 | `application.user` | `service`、`command`、`result`、`port`、`reference` | 用户用例、输入输出、外部能力及用户引用合同 |
 | `application.file` | `service`、`content`、`policy`、`result`、`port` | 文件用例、内容读取合同、约束和外部能力 |
-| `application.knowledge` | `service`、`command`、`result`、`port`、`exception` | 基础与入库用例、片段与索引输入、构建结果、仓储与处理接口 |
+| `application.knowledge` | `service`、`command`、`result`、`port`、`processing`、`exception` | 基础与入库用例、索引输入、构建结果、仓储及策略 ports、统一处理模型/路由与源字节准备 |
 | `domain.user` | `model`、`exception` | 用户数据和未找到异常 |
 | `domain.file` | `model`、`rule`、`exception` | 文件数据、文本规则与业务异常 |
 | `domain.knowledge` | `model`、`value`、`enums`、`rule`、`exception` | 四表记录、标题、状态、输入规则与异常 |
@@ -46,12 +46,14 @@ web ───────────────→ application ─────
 | `infrastructure.auth` | `config`、`web` | 模拟身份配置与请求集成 |
 | `infrastructure.persistence.typehandler`、`infrastructure.time` | 公共基础能力 | UTC 类型转换与共享时钟 |
 
+知识库应用层 `processing` 集中维护 `PreparedSource`、`ParsedDocument`、`ContentBlock`、`ChunkDraft`、`ChunkGroupDraft`、模式/选项、策略路由和源读取器；这些是本次处理合同，不是数据库实体或具体解析算法。`port` 中的 `KnowledgeDocumentParser`、`KnowledgeChunker` 独立选择，主构建服务不会依据格式编写多套流程。
+
 三个业务的 MyBatis 文件统一按职责分类。以知识库为例：
 
 ```text
 infrastructure/knowledge/
 ├── config/            # 基础装配、RAG 条件装配与参数
-├── ai/                # Reader/Splitter、向量适配与唯一切分器
+├── ai/                # 已实现的 Spring AI 向量适配（没有生产 Reader/Splitter）
 └── persistence/
     ├── entity/        # 四表数据库实体
     ├── mapper/        # 四个 Mapper，封装 SQL 入口
@@ -102,8 +104,10 @@ MySQL 的 `DATETIME(6)` 不保存时区。[UtcInstantTypeHandler](../src/main/ja
 
 模型和存储默认关闭；普通测试使用 H2、Mock 或内存存储替身。健康接口不探测这些外部服务。
 
-Spring AI 通过 OpenAI 与 Qdrant starter 接入。txt/md 入库使用 `TextReader`、`MarkdownDocumentReader`、`TokenTextSplitter` 和 `QdrantVectorStore`，应用只依赖自己的 `KnowledgeContentProcessor`、`KnowledgeVectorIndex`。默认 Embedding 与向量存储类型均为 none，RAG 构建关闭。启用后才装配构建入口和外部适配；不使用 SimpleVectorStore。
+Spring AI 依赖用于未来模型能力与当前向量适配。当前已实现的 RAG 固定骨架包含策略 ports、格式/模式路由、预读原始字节并核对大小与 SHA-256、按组保存片段、向量批次和版本生命周期；没有生产文档解析器或分块器，也没有生产 `TextReader`、`MarkdownDocumentReader` 或 `TokenTextSplitter` 流程。`PreparedSource` 保存同一份已验证原始字节，但不执行 UTF-8 解码；未来文本解析器负责该校验。
 
-当前没有真实登录、退出、角色权限、账户启停、客户端直传、跨系统自动补偿、完整并发治理、PDF/DOCX/OCR 入库、异步任务、检索或问答。知识库基础持久化和 txt/md 同步入库、版本发布已实现；后续能力仍按明确需求加入。
+RAG 默认关闭。开启时需有实际注册的解析与 FLAT 分块策略、OpenAI Embedding 及 Qdrant 适配器，否则启动失败；配置变量本身不能启用真实 txt/md 处理。策略替身测试可覆盖固定编排、本地持久化与向量边界，但不等价于真实解析、切分或外部调用验收。`build(actor,document)` 默认选 FLAT，内部第三参数可选 PARENT_CHILD，不新增模式配置项。数据库批次以整组为单位，`RAG_BATCH_SIZE` 不拆组；向量仅写 RETRIEVAL 且使用精确批次上限，`RAG_MAX_NUM_CHUNKS` 统计所有角色。
+
+当前没有真实登录、退出、角色权限、账户启停、客户端直传、跨系统自动补偿、完整并发治理、PDF/DOCX/OCR 解析、异步任务、检索或问答。知识库基础持久化和父子字段存储、固定构建编排及版本发布已实现；未来能力仍按明确需求加入。
 
 开发约定与同步要求见 [AGENTS.md](../AGENTS.md)，构建和验证边界见 [测试说明](./guides/testing.md)。

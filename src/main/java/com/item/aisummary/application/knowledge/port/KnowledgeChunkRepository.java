@@ -1,5 +1,6 @@
 package com.item.aisummary.application.knowledge.port;
 
+import com.item.aisummary.domain.knowledge.enums.ChunkRole;
 import com.item.aisummary.domain.knowledge.model.KnowledgeChunk;
 import java.util.List;
 import java.util.Optional;
@@ -53,4 +54,13 @@ public interface KnowledgeChunkRepository {
      * @return 该版本下的片段总行数
      */
     long countByRevisionId(String revisionId);
+
+    /**
+     * 统计指定版本中指定角色的片段实际行数。
+     *
+     * @param revisionId 版本唯一标识
+     * @param role 片段角色
+     * @return 匹配的片段数量
+     */
+    long countByRevisionIdAndRole(String revisionId, ChunkRole role);
 }
