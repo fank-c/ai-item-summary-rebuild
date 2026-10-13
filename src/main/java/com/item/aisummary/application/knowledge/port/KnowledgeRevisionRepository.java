@@ -51,7 +51,7 @@ public interface KnowledgeRevisionRepository {
     Optional<KnowledgeDocumentRevision> findByIdForUpdate(String id);
 
     /**
-     * 仅更新 building 状态版本的片段总数 chunk_count。
+     * 仅更新 building 状态版本的全部片段总数 chunk_count，包含两种角色，不表示向量数量。
      *
      * @param id 版本唯一标识
      * @param chunkCount 更新后的片段计数
@@ -64,7 +64,7 @@ public interface KnowledgeRevisionRepository {
      *
      * @param id 版本 ID
      * @param documentId 归属的知识文档 ID
-     * @param chunkCount 片段总数
+     * @param chunkCount 两种角色全部片段的总数，不表示向量数量
      * @param sourceSha256 源文件 SHA-256 摘要
      * @param now 微秒时间戳
      * @return 影响行数（预期为 1）

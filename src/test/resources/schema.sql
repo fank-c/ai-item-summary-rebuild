@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS knowledge_document_revision (
     revision_number INT NOT NULL,
     revision_status VARCHAR(24) NOT NULL,
     source_sha256 CHAR(64) NULL,
+    -- Counts both CONTEXT and RETRIEVAL rows, not vector count.
     chunk_count INT NOT NULL DEFAULT 0,
     failure_stage VARCHAR(64) NULL,
     failure_code VARCHAR(64) NULL,
@@ -74,6 +75,9 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_revision_document_status
 CREATE TABLE IF NOT EXISTS knowledge_chunk (
     id VARCHAR(32) NOT NULL PRIMARY KEY,
     revision_id VARCHAR(32) NOT NULL,
+    parent_chunk_id VARCHAR(32) NULL,
+    chunk_role VARCHAR(16) NOT NULL,
+    -- Unique order across all roles in one revision; not a source-text position.
     sequence_no INT NOT NULL,
     content MEDIUMTEXT NOT NULL,
     heading_path JSON NULL,
@@ -85,3 +89,5 @@ CREATE TABLE IF NOT EXISTS knowledge_chunk (
     create_at TIMESTAMP(6) NOT NULL,
     CONSTRAINT uk_knowledge_chunk_revision_sequence UNIQUE (revision_id, sequence_no)
 );
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunk_revision_parent_sequence
+    ON knowledge_chunk (revision_id, parent_chunk_id, sequence_no);

@@ -15,7 +15,7 @@ public record KnowledgeDocumentRevision(
         RevisionStatus revisionStatus,
         /** 构建时读取的源文件 SHA-256 摘要。 */
         String sourceSha256,
-        /** 当前版本已生成的片段数量。 */
+        /** 当前版本全部 CONTEXT 与 RETRIEVAL 片段总数，不表示向量数量。 */
         int chunkCount,
         /** 失败发生的处理阶段。 */
         String failureStage,

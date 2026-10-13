@@ -4,6 +4,7 @@ import com.item.aisummary.application.knowledge.port.KnowledgeBaseRepository;
 import com.item.aisummary.application.knowledge.port.KnowledgeChunkRepository;
 import com.item.aisummary.application.knowledge.port.KnowledgeDocumentRepository;
 import com.item.aisummary.application.knowledge.port.KnowledgeRevisionRepository;
+import com.item.aisummary.domain.knowledge.enums.ChunkRole;
 import com.item.aisummary.domain.knowledge.enums.DocumentIndexStatus;
 import com.item.aisummary.domain.knowledge.enums.RevisionStatus;
 import com.item.aisummary.domain.knowledge.exception.KnowledgeConflictException;
@@ -112,6 +113,33 @@ class KnowledgePersistenceTest {
             .isEqualTo(LocalDateTime.parse("2026-01-02T03:04:05.123456"));
     }
 
+    @Test void roundTripsChunkRoleParentAndScopedSequenceLookupAndCountsAllRoles() {
+        var context = canonicalChunk("context", "revision", null, ChunkRole.CONTEXT, 0);
+        var child = canonicalChunk("child", "revision", "context", ChunkRole.RETRIEVAL, 1);
+        var parentless = canonicalChunk("parentless", "revision", null, ChunkRole.RETRIEVAL, 2);
+        chunks.insert(context);
+        chunks.insert(child);
+        chunks.insert(parentless);
+        chunks.insert(canonicalChunk("other-revision", "other", null, ChunkRole.RETRIEVAL, 1));
+
+        assertThat(chunks.findById("context")).contains(context);
+        assertThat(chunks.findById("child")).contains(child);
+        assertThat(chunks.findById("parentless")).contains(parentless);
+        assertThat(chunks.findByRevisionIdAndSequenceNo("revision", 1)).contains(child);
+        assertThat(chunks.findByRevisionIdAndSequenceNo("other", 1)).contains(
+            canonicalChunk("other-revision", "other", null, ChunkRole.RETRIEVAL, 1));
+        assertThat(chunks.findByRevisionIdAndSequenceNo("revision", 9)).isEmpty();
+        assertThat(chunks.countByRevisionId("revision")).isEqualTo(3);
+        assertThat(jdbc.queryForObject("SELECT chunk_role FROM knowledge_chunk WHERE id='context'", String.class))
+            .isEqualTo("CONTEXT");
+        assertThat(jdbc.queryForObject("SELECT chunk_role FROM knowledge_chunk WHERE id='child'", String.class))
+            .isEqualTo("RETRIEVAL");
+        assertThat(jdbc.queryForObject("SELECT parent_chunk_id FROM knowledge_chunk WHERE id='child'", String.class))
+            .isEqualTo("context");
+        assertThat(jdbc.queryForObject("SELECT parent_chunk_id FROM knowledge_chunk WHERE id='context'", String.class))
+            .isNull();
+    }
+
     @Test void databaseDocumentUniqueIndexIsTheFinalConflictGuard() {
         documents.insert(document("d1", "base", "file"));
         assertThatThrownBy(() -> documents.insert(document("d2", "base", "file")))
@@ -159,6 +187,11 @@ class KnowledgePersistenceTest {
             .insert(revision("revision", "document", 1)));
         assertThatIllegalStateException().isThrownBy(() -> new MyBatisKnowledgeChunkRepository(chunkMapper)
             .insert(new KnowledgeChunk("chunk", "revision", 0, "正文", null, null, null, null, null, null, CREATED)));
+    }
+
+    private static KnowledgeChunk canonicalChunk(String id, String revision, String parent, ChunkRole role, int sequence) {
+        return new KnowledgeChunk(id, revision, parent, role, sequence, "正文", null,
+            null, null, null, null, null, CREATED);
     }
 
     private static KnowledgeDocument document(String id, String base, String file) {

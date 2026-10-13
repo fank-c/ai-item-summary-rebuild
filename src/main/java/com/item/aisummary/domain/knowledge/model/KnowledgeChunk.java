@@ -1,17 +1,22 @@
 package com.item.aisummary.domain.knowledge.model;
 
+import com.item.aisummary.domain.knowledge.enums.ChunkRole;
 import com.item.aisummary.domain.knowledge.rule.KnowledgeRules;
 import com.item.aisummary.domain.knowledge.value.Heading;
 import java.time.Instant;
 import java.util.List;
 
-/** 调用方提供的片段数据；位置相对处理后全文，未知信息保持为空。 */
+/** 不可变的上下文或检索片段；父子使用同一处理后全文参照，未知位置保持为空。 */
 public record KnowledgeChunk(
         /** 片段业务 ID。 */
         String id,
         /** 所属文档版本 ID。 */
         String revisionId,
-        /** 同一版本内从 0 开始的片段序号。 */
+        /** 同版本无父 CONTEXT 块的 ID；实际存在与归属由保存服务校验。 */
+        String parentChunkId,
+        /** 上下文或检索用途，不表示文档章节层级。 */
+        ChunkRole chunkRole,
+        /** 全版本范围内非负且唯一的全局序号，不表示原文位置。 */
         int sequenceNo,
         /** 处理后的片段正文。 */
         String content,
@@ -29,9 +34,42 @@ public record KnowledgeChunk(
         Integer pageEnd,
         /** 片段创建时间。 */
         Instant createAt) {
+    /**
+     * 保留旧的普通片段构造用法，并明确映射为无父级检索片段。
+     */
+    public KnowledgeChunk(
+            String id,
+            String revisionId,
+            int sequenceNo,
+            String content,
+            List<Heading> headingPath,
+            Integer tokenCount,
+            Integer startOffset,
+            Integer endOffset,
+            Integer pageStart,
+            Integer pageEnd,
+            Instant createAt) {
+        this(id, revisionId, null, ChunkRole.RETRIEVAL, sequenceNo, content, headingPath,
+                tokenCount, startOffset, endOffset, pageStart, pageEnd, createAt);
+    }
+
     public KnowledgeChunk {
         KnowledgeRules.requireChunk(
                 sequenceNo, content, tokenCount, startOffset, endOffset, pageStart, pageEnd);
+        if (chunkRole == null) {
+            throw new IllegalArgumentException("知识片段角色不能为空");
+        }
+        if (parentChunkId != null) {
+            if (parentChunkId.isBlank() || parentChunkId.length() > 32) {
+                throw new IllegalArgumentException("父片段 ID 不能为空白且最多 32 个字符");
+            }
+            if (parentChunkId.equals(id)) {
+                throw new IllegalArgumentException("片段不能引用自身为父片段");
+            }
+        }
+        if (chunkRole == ChunkRole.CONTEXT && parentChunkId != null) {
+            throw new IllegalArgumentException("上下文片段不能具有父片段");
+        }
         if (headingPath != null) {
             if (headingPath.stream().anyMatch(heading -> heading == null)) {
                 throw new IllegalArgumentException("标题路径不能包含空项");
@@ -46,6 +84,10 @@ public record KnowledgeChunk(
                 + id
                 + ", revisionId="
                 + revisionId
+                + ", parentChunkId="
+                + parentChunkId
+                + ", chunkRole="
+                + chunkRole
                 + ", sequenceNo="
                 + sequenceNo
                 + "]";

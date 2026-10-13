@@ -17,7 +17,7 @@
 | `KnowledgeBaseService` | `create(name)`、`findById(id)`、`findAll()`、`rename(id,name)` | 名称 trim 后非空白，最多 100 个 Java 字符；允许同名多库 |
 | `KnowledgeDocumentService` | `register(actorUserId,knowledgeBaseId,fileId)`、详情与按库查询 | 只查文件元数据，创建 pending 文档 |
 | `KnowledgeRevisionService` | `create(documentId)`、详情与按文档查询 | 基础记录入口，MAX+1 创建 building；不执行构建或发布 |
-| `KnowledgeChunkService` | `saveBatch(revisionId,commands)`、详情与按版本查询 | building 版本追加片段，插入与实际总数共同提交 |
+| `KnowledgeChunkService` | `saveBatch(revisionId,commands)`、详情与按版本查询 | building 版本追加普通块或两层上下文/检索块，父引用校验、插入与实际总数共同提交 |
 | `KnowledgeIndexBuildService` | `build(actorUserId,knowledgeDocumentId)` | 完整读取、切分、保存、向量化、发布；只在 RAG 开关启用时装配 |
 | `KnowledgeBuildLifecycleService` | 构建创建、发布、失败及清理事实记录 | 内部短事务，由构建服务协调；不调用外部索引 |
 
@@ -63,7 +63,24 @@ Splitter 固定 `CL100K_BASE`，默认 512 Token、`minChunkSizeChars=200`、`mi
 
 片段 ID 保持数据库中的 32 位 UUID。Spring AI Qdrant 2.0.1 使用 `UUID.fromString`，适配器为同一个 UUID 补连字符作为 Document ID；没有生成第二个标识，metadata 的 `knowledge_chunk_id` 仍保留原始 32 位值。向量元数据还包含库、文档、revision、文件、序号、名称、MIME 和源 SHA-256。
 
-基础片段批次仍采用追加语义。输入必须非空，正文非空白，序号非负且批内唯一。已存序号冲突为 `CHUNK_SEQUENCE_CONFLICT`，非 building 为 `REVISION_NOT_BUILDING`。每批使用 READ_COMMITTED 并锁住版本，插入和实际总数更新共同回滚；同版本并发追加串行执行。基础设施检查实际连接隔离级别，拒绝不兼容外层事务。
+基础片段批次采用追加语义。输入必须非空，正文非空白，全局序号非负且批内唯一；父块和检索块共同占用版本内序号，不是原文位置或兄弟节点序号。已存序号冲突为 `CHUNK_SEQUENCE_CONFLICT`，非 building 为 `REVISION_NOT_BUILDING`。每批使用 READ_COMMITTED 并锁住版本，所有关系校验、插入和实际总数更新共同回滚；同版本并发追加串行执行。基础设施检查实际连接隔离级别，拒绝不兼容外层事务。
+
+基础入口支持 `ChunkRole.CONTEXT`（上下文）与 `ChunkRole.RETRIEVAL`（检索）。CONTEXT 必须无父，RETRIEVAL 可独立存在或关联同版本的无父 CONTEXT；只允许两层，不保存任意深度章节树。调用命令以 `parentSequenceNo` 指向本批或已保存父块的全局序号，保存服务预分配本批 UUID，再在版本锁内把引用转换为 `parent_chunk_id`。本批子块可在父块之前传入，返回值仍保持输入顺序；父块若不在本批，必须已在目标版本保存。
+
+缺失父块抛 `KnowledgeNotFoundException`；缺失角色、负父序号、自引用、CONTEXT 有父或 RETRIEVAL 作为父块抛 `IllegalArgumentException`，全部在插入前拒绝。父查询限定目标版本，不从其他版本回退。原有八参数 `SaveKnowledgeChunkCommand` 构造器明确创建无父 RETRIEVAL，已有平铺调用保持兼容。父子正文分别保存，`chunk_count` 统计两种角色的全部行数，不等于向量数。本次仅扩展存储合同，不实现父子切分、向量角色选择或父块检索；后续这些能力必须遵守角色及活动版本边界。
+
+例如，在同一批中保存上下文与检索块（所有位置未知时保持 null）：
+
+```java
+var context = new SaveKnowledgeChunkCommand(
+    null, ChunkRole.CONTEXT, 0, "完整上下文", null, null, null, null, null, null);
+var retrieval = new SaveKnowledgeChunkCommand(
+    0, ChunkRole.RETRIEVAL, 1, "用于检索的短片段", null, null, null, null, null, null);
+var saved = knowledgeChunkService.saveBatch(revisionId, List.of(context, retrieval));
+// saved.get(1).parentChunkId() 等于 saved.get(0).id()。
+```
+
+父子结构与标题路径独立，也不根据子块正文拼接或自动推算父块的正文与位置。
 
 ### 构建互斥与版本发布
 
@@ -97,7 +114,7 @@ Splitter 固定 `CL100K_BASE`，默认 512 Token、`minChunkSizeChars=200`、`mi
 
 基础片段入口支持有序 `List<Heading>`，JSON NULL 与空数组分别保留，列表复制为不可修改快照。使用既有 Jackson 3；MySQL 绑定 JSON 文本，H2 绑定原生 UTF-8 JSON 字节。
 
-调用方提供的 Token 数必须非负。偏移同时为空或满足 `0 <= start_offset < end_offset`，相对处理后全文的 UTF-16 位置；页码同时为空或满足 `1 <= page_start <= page_end`。未知值不推算，四表未保存完整处理后全文或 OCR 坐标。txt/md 自动构建均不填这些位置。
+调用方提供的 Token 数必须非负。偏移同时为空或满足 `0 <= start_offset < end_offset`，父子都相对同一处理后全文的 UTF-16 位置，不改成父块内偏移；页码同时为空或满足 `1 <= page_start <= page_end`。未知值不推算，四表未保存完整处理后全文或 OCR 坐标。txt/md 自动构建均不填这些位置。
 
 ID 使用 32 位 UUID；时间使用共享 Clock、Instant 与 UTC 微秒。版本表为 `created_at`，其余知识表为 `create_at`。
 
@@ -113,7 +130,7 @@ ID 使用 32 位 UUID；时间使用共享 Clock、Instant 与 UTC 微秒。版�
 | 真实 Mapper 与 JSON | [persistence](../../src/main/java/com/item/aisummary/infrastructure/knowledge/persistence/) |
 | 基础规则与字段 | [KnowledgeRulesTest](../../src/test/java/com/item/aisummary/domain/knowledge/rule/KnowledgeRulesTest.java)、[KnowledgePersistenceTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/persistence/repository/KnowledgePersistenceTest.java) |
 | 登记、归属与版本号竞争 | [KnowledgeServicesTest](../../src/test/java/com/item/aisummary/application/knowledge/service/KnowledgeServicesTest.java) |
-| 追加、实际计数与失败回滚 | [KnowledgeChunkServiceTest](../../src/test/java/com/item/aisummary/application/knowledge/service/KnowledgeChunkServiceTest.java) |
+| 普通与父子片段追加、关系校验、实际总数与失败回滚 | [KnowledgeChunkServiceTest](../../src/test/java/com/item/aisummary/application/knowledge/service/KnowledgeChunkServiceTest.java) |
 | 构建锁、完整发布与回滚 | [KnowledgeBuildLifecycleServiceTest](../../src/test/java/com/item/aisummary/application/knowledge/service/KnowledgeBuildLifecycleServiceTest.java)、[KnowledgeBuildTransactionBoundaryTest](../../src/test/java/com/item/aisummary/application/knowledge/service/KnowledgeBuildTransactionBoundaryTest.java) |
 | 完整入库、摘要、批次和失败清理 | [KnowledgeIndexBuildServiceTest](../../src/test/java/com/item/aisummary/application/knowledge/service/KnowledgeIndexBuildServiceTest.java) |
 | Reader 与粒度 | [SpringAiKnowledgeContentProcessorTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/ai/SpringAiKnowledgeContentProcessorTest.java) |

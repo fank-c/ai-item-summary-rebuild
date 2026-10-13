@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS `knowledge_document_revision` (
     `revision_number` INT NOT NULL COMMENT '同一文档内递增的版本号',
     `revision_status` VARCHAR(24) NOT NULL COMMENT 'building/ready/failed/superseded',
     `source_sha256` CHAR(64) NULL COMMENT '本次实际读取源文件的 SHA-256',
-    `chunk_count` INT NOT NULL DEFAULT 0 COMMENT '本版本生成的片段数量',
+    `chunk_count` INT NOT NULL DEFAULT 0 COMMENT '本版本上下文块与检索块的片段总数',
     `failure_stage` VARCHAR(64) NULL COMMENT '失败发生的处理阶段',
     `failure_code` VARCHAR(64) NULL COMMENT '失败编码',
     `failure_message` VARCHAR(512) NULL COMMENT '失败的脱敏摘要',
@@ -90,9 +90,11 @@ CREATE TABLE IF NOT EXISTS `knowledge_document_revision` (
   COLLATE = utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `knowledge_chunk` (
-    `id` VARCHAR(32) NOT NULL COMMENT '片段 ID；向量关联使用同一业务标识',
+    `id` VARCHAR(32) NOT NULL COMMENT '片段 ID；检索块的向量关联使用同一业务标识',
     `revision_id` VARCHAR(32) NOT NULL COMMENT '所属构建版本 ID',
-    `sequence_no` INT NOT NULL COMMENT '同一版本内从 0 开始的片段序号',
+    `parent_chunk_id` VARCHAR(32) NULL COMMENT '同版本无父 CONTEXT 块 ID；关系由应用层校验',
+    `chunk_role` VARCHAR(16) NOT NULL COMMENT '片段角色：CONTEXT 或 RETRIEVAL',
+    `sequence_no` INT NOT NULL COMMENT '版本内非负全局顺序，两种角色共同占用，不表示原文位置',
     `content` MEDIUMTEXT NOT NULL COMMENT '片段正文',
     `heading_path` JSON NULL COMMENT '有序标题路径，例如 [{"level":1,"title":"说明"}]',
     `token_count` INT NULL COMMENT '所用分词器的计数；无法确定时为空',
@@ -102,7 +104,8 @@ CREATE TABLE IF NOT EXISTS `knowledge_chunk` (
     `page_end` INT NULL COMMENT '来源结束页，包含该页；未知时为空',
     `create_at` DATETIME(6) NOT NULL,
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_knowledge_chunk_revision_sequence` (`revision_id`, `sequence_no`)
+    UNIQUE KEY `uk_knowledge_chunk_revision_sequence` (`revision_id`, `sequence_no`),
+    KEY `idx_knowledge_chunk_revision_parent_sequence` (`revision_id`, `parent_chunk_id`, `sequence_no`)
 ) ENGINE = InnoDB
   DEFAULT CHARACTER SET = utf8mb4
   COLLATE = utf8mb4_unicode_ci;

@@ -13,7 +13,8 @@ public interface KnowledgeChunkRepository {
     /**
      * 插入单个知识片段记录。
      *
-     * <p>批次保存的事务原子性由上层应用服务负责。
+     * <p>父块存在、同版本、角色匹配及批次事务原子性由应用保存服务负责。
+     * 业务写入应经过该服务，不以直接仓储写入绕过关系校验。
      *
      * @param chunk 待保存的知识片段对象
      * @return 保存成功后的知识片段对象
@@ -37,10 +38,19 @@ public interface KnowledgeChunkRepository {
     List<KnowledgeChunk> findByRevisionId(String revisionId);
 
     /**
-     * 统计指定版本内的片段总数。
+     * 按版本与全局序号查询片段；父引用只能在目标版本范围内解析。
      *
      * @param revisionId 版本唯一标识
-     * @return 该版本下的片段数量
+     * @param sequenceNo 版本内全局序号
+     * @return 匹配的片段，不从其他版本回退查找
+     */
+    Optional<KnowledgeChunk> findByRevisionIdAndSequenceNo(String revisionId, int sequenceNo);
+
+    /**
+     * 统计指定版本内的所有片段，包括 CONTEXT 与 RETRIEVAL，不表示向量数量。
+     *
+     * @param revisionId 版本唯一标识
+     * @return 该版本下的片段总行数
      */
     long countByRevisionId(String revisionId);
 }

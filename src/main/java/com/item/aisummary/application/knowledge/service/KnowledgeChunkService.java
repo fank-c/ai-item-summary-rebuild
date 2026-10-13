@@ -3,6 +3,7 @@ package com.item.aisummary.application.knowledge.service;
 import com.item.aisummary.application.knowledge.command.SaveKnowledgeChunkCommand;
 import com.item.aisummary.application.knowledge.port.KnowledgeChunkRepository;
 import com.item.aisummary.application.knowledge.port.KnowledgeRevisionRepository;
+import com.item.aisummary.domain.knowledge.enums.ChunkRole;
 import com.item.aisummary.domain.knowledge.enums.RevisionStatus;
 import com.item.aisummary.domain.knowledge.exception.KnowledgeConflictException;
 import com.item.aisummary.domain.knowledge.exception.KnowledgeNotFoundException;
@@ -12,6 +13,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.UUID;
@@ -36,10 +38,13 @@ public class KnowledgeChunkService {
     }
 
     /**
-     * 向处于 building 状态的版本批量追加保存片段，并原子更新版本累计片段数。
+     * 向 building 版本追加片段，锁内解析父引用并原子更新包含两种角色的实际总数。
+     *
+     * <p>父引用以版本内全局序号指定，可指向本批或已保存的无父 CONTEXT 块。
+     * 先校验全部关系再插入，不从其他版本解析父块，不接受多层关系。
      *
      * @param revisionId 目标版本 ID
-     * @param commands 待追加的片段命令列表（批内序号唯一）
+     * @param commands 待追加的片段命令列表（批内全局序号唯一）
      * @return 保存成功的片段实体列表
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -58,12 +63,13 @@ public class KnowledgeChunkService {
             throw new KnowledgeConflictException("REVISION_NOT_BUILDING", "只有 building 版本可以保存片段");
         }
 
-        List<KnowledgeChunk> saved = new ArrayList<>(prepared.size());
-        for (KnowledgeChunk chunk : prepared) {
+        List<KnowledgeChunk> resolved = resolveParents(id, input, prepared);
+        List<KnowledgeChunk> saved = new ArrayList<>(resolved.size());
+        for (KnowledgeChunk chunk : resolved) {
             saved.add(chunks.insert(chunk));
         }
 
-        // 追加批次后重新读取实际总数，不能用当前输入数量覆盖已有片段数。
+        // 父块和检索块都计入实际行数；此总数不等于向量数量，也不能覆盖先前批次。
         int total = Math.toIntExact(chunks.countByRevisionId(id));
         if (revisions.updateChunkCount(id, total) != 1) {
             throw new IllegalStateException("更新版本片段数量结果不符合预期");
@@ -139,10 +145,21 @@ public class KnowledgeChunkService {
             if (!sequences.add(command.sequenceNo())) {
                 throw new IllegalArgumentException("批次内片段序号不能重复");
             }
+            if (command.parentSequenceNo() != null) {
+                if (command.parentSequenceNo() < 0
+                        || command.parentSequenceNo() == command.sequenceNo()) {
+                    throw new IllegalArgumentException("父块序号必须非负且不能指向自身");
+                }
+                if (command.chunkRole() == ChunkRole.CONTEXT) {
+                    throw new IllegalArgumentException("上下文块不能有父块");
+                }
+            }
             prepared.add(
                     new KnowledgeChunk(
                             UUID.randomUUID().toString().replace("-", ""),
                             revisionId,
+                            null,
+                            command.chunkRole(),
                             command.sequenceNo(),
                             command.content(),
                             command.headingPath(),
@@ -154,5 +171,40 @@ public class KnowledgeChunkService {
                             now));
         }
         return prepared;
+    }
+
+    /** 锁住版本后校验所有父引用，并将处理序号转换为已分配的业务 ID。 */
+    private List<KnowledgeChunk> resolveParents(
+            String revisionId, List<SaveKnowledgeChunkCommand> commands,
+            List<KnowledgeChunk> prepared) {
+        var parentsBySequence = new HashMap<Integer, KnowledgeChunk>();
+        for (KnowledgeChunk chunk : prepared) {
+            parentsBySequence.put(chunk.sequenceNo(), chunk);
+        }
+        var resolved = new ArrayList<KnowledgeChunk>(prepared.size());
+        for (int index = 0; index < commands.size(); index++) {
+            var child = prepared.get(index);
+            Integer parentSequence = commands.get(index).parentSequenceNo();
+            if (parentSequence == null) {
+                resolved.add(child);
+                continue;
+            }
+            KnowledgeChunk parent = parentsBySequence.get(parentSequence);
+            if (parent == null) {
+                parent = chunks.findByRevisionIdAndSequenceNo(revisionId, parentSequence)
+                        .orElseThrow(() -> new KnowledgeNotFoundException("父上下文片段"));
+                parentsBySequence.put(parentSequence, parent);
+            }
+            if (!revisionId.equals(parent.revisionId())
+                    || parent.chunkRole() != ChunkRole.CONTEXT
+                    || parent.parentChunkId() != null) {
+                throw new IllegalArgumentException("父块必须是同版本的无父上下文块");
+            }
+            resolved.add(new KnowledgeChunk(
+                    child.id(), revisionId, parent.id(), child.chunkRole(), child.sequenceNo(),
+                    child.content(), child.headingPath(), child.tokenCount(), child.startOffset(),
+                    child.endOffset(), child.pageStart(), child.pageEnd(), child.createAt()));
+        }
+        return resolved;
     }
 }

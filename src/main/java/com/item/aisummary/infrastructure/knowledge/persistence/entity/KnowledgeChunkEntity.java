@@ -20,7 +20,13 @@ public final class KnowledgeChunkEntity {
     /** 所属文档版本 ID；通过逻辑关联保存，不使用物理外键。 */
     public String revisionId;
 
-    /** 同一版本内从 0 开始且唯一的片段序号。 */
+    /** 可选父片段 ID；父存在、同版本及父角色由应用层保证。 */
+    public String parentChunkId;
+
+    /** 领域角色的显式持久化字符串，避免隐式枚举映射。 */
+    public String chunkRole;
+
+    /** 全版本范围内非负且唯一的全局序号，不表示原文位置。 */
     public int sequenceNo;
 
     /** 片段正文；保留处理后的原文，不在持久化层截断。 */

@@ -27,7 +27,7 @@ public final class KnowledgeRevisionEntity {
     /** 创建该版本时读取的源文件 SHA-256；尚未读取时为空。 */
     public String sourceSha256;
 
-    /** 当前版本已保存的片段总数；由片段批次事务重新统计。 */
+    /** 当前版本两种角色的全部片段总数；由批次事务重新统计，不表示向量数量。 */
     public int chunkCount;
 
     /** 失败发生的处理阶段；版本成功或未失败时为空。 */

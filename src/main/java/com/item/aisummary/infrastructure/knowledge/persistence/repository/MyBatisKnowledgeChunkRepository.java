@@ -2,6 +2,7 @@ package com.item.aisummary.infrastructure.knowledge.persistence.repository;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.item.aisummary.application.knowledge.port.KnowledgeChunkRepository;
+import com.item.aisummary.domain.knowledge.enums.ChunkRole;
 import com.item.aisummary.domain.knowledge.exception.KnowledgeConflictException;
 import com.item.aisummary.domain.knowledge.model.KnowledgeChunk;
 import com.item.aisummary.infrastructure.knowledge.persistence.entity.KnowledgeChunkEntity;
@@ -32,6 +33,8 @@ public class MyBatisKnowledgeChunkRepository implements KnowledgeChunkRepository
         KnowledgeChunkEntity entity = new KnowledgeChunkEntity();
         entity.id = chunk.id();
         entity.revisionId = chunk.revisionId();
+        entity.parentChunkId = chunk.parentChunkId();
+        entity.chunkRole = chunk.chunkRole().value();
         entity.sequenceNo = chunk.sequenceNo();
         entity.content = chunk.content();
         entity.headingPath = chunk.headingPath();
@@ -83,8 +86,19 @@ public class MyBatisKnowledgeChunkRepository implements KnowledgeChunkRepository
                 .toList();
     }
 
+    /** 仅按版本 ID 与全版本序号查找，避免跨版本序号误命中。 */
+    @Override
+    public Optional<KnowledgeChunk> findByRevisionIdAndSequenceNo(String revisionId, int sequenceNo) {
+        return Optional.ofNullable(
+                        mapper.selectOne(
+                                new QueryWrapper<KnowledgeChunkEntity>()
+                                        .eq("revision_id", revisionId)
+                                        .eq("sequence_no", sequenceNo)))
+                .map(MyBatisKnowledgeChunkRepository::toDomain);
+    }
+
     /**
-     * 统计指定版本内的片段总数。
+     * 统计指定版本内的片段总数；上下文块与检索块均包含在总数内。
      *
      * @param revisionId 版本唯一标识
      * @return 该版本下的片段数量
@@ -100,6 +114,8 @@ public class MyBatisKnowledgeChunkRepository implements KnowledgeChunkRepository
         return new KnowledgeChunk(
                 entity.id,
                 entity.revisionId,
+                entity.parentChunkId,
+                ChunkRole.fromValue(entity.chunkRole),
                 entity.sequenceNo,
                 entity.content,
                 entity.headingPath,

@@ -8,12 +8,12 @@
 | --- | --- | --- |
 | 用户 | 资料 CRUD、BCrypt 密码摘要、逻辑删除、跨模块用户引用 | [用户模块](./docs/modules/user.md) |
 | 文件 | 服务端上传、临时下载地址、删除、带归属校验的内部内容读取 | [文件模块](./docs/modules/file.md) |
-| 知识库 | 四表持久化、基础内部服务、txt/md 读取切分、OpenAI Embedding、Qdrant 入库与版本发布 | [知识库模块](./docs/modules/knowledge.md) |
+| 知识库 | 四表持久化、基础内部服务、两层上下文/检索片段存储、txt/md 读取切分、OpenAI Embedding、Qdrant 入库与版本发布 | [知识库模块](./docs/modules/knowledge.md) |
 | 公共能力 | 模拟请求身份、ProblemDetail 错误响应、请求标识、健康检查 | [工程结构与边界](./docs/architecture.md) |
 
 用户、文件及知识库元数据使用 MySQL，文件对象按配置存入 MinIO 或阿里云 OSS。H2 仅用于自动测试。聊天模型、Embedding、Qdrant、RAG 构建和对象存储默认关闭。基础元数据服务不调用模型；启用 txt/md 入库后才调用 Embedding 与向量存储。
 
-知识库能力通过内部 Java 服务提供。txt/md 入库入口为 `KnowledgeIndexBuildService.build(actorUserId,knowledgeDocumentId)`，启用步骤见 [运行指南](./docs/guides/getting-started.md#6-启用-txtmd-入库)。当前没有知识库 HTTP、访问权限、检索或问答；文件归属检查不等于知识库授权。字段与约束见 [知识库表结构](./docs/reference/database/knowledge.md)。
+知识库能力通过内部 Java 服务提供。txt/md 入库入口为 `KnowledgeIndexBuildService.build(actorUserId,knowledgeDocumentId)`，启用步骤见 [运行指南](./docs/guides/getting-started.md#6-启用-txtmd-入库)。当前没有知识库 HTTP、访问权限、检索或问答；文件归属检查不等于知识库授权。片段存储支持 CONTEXT/RETRIEVAL 角色和同版本父引用，尚未实现父子切分或父块检索。字段与约束见 [知识库表结构](./docs/reference/database/knowledge.md#knowledge_chunk)，旧表需要另行手动升级，初始化脚本不会自动添加新列。
 
 ## 快速开始
 

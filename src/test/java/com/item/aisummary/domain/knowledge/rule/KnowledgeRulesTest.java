@@ -1,5 +1,6 @@
 package com.item.aisummary.domain.knowledge.rule;
 
+import com.item.aisummary.domain.knowledge.enums.ChunkRole;
 import com.item.aisummary.domain.knowledge.model.KnowledgeChunk;
 import com.item.aisummary.domain.knowledge.value.Heading;
 import org.junit.jupiter.api.Test;
@@ -36,6 +37,37 @@ class KnowledgeRulesTest {
         assertThat(chunk.endOffset()).isNull();
         assertThat(chunk.pageStart()).isNull();
         assertThat(chunk.pageEnd()).isNull();
+    }
+
+    @Test void legacyConstructorDefaultsToParentlessRetrievalChunk() {
+        KnowledgeChunk chunk = chunk(0, "正文", null, null, null, null, null, null);
+        assertThat(chunk.parentChunkId()).isNull();
+        assertThat(chunk.chunkRole()).isEqualTo(ChunkRole.RETRIEVAL);
+    }
+
+    @Test void chunkRoleUsesStableValuesAndRejectsUnknownValues() {
+        assertThat(ChunkRole.CONTEXT.value()).isEqualTo("CONTEXT");
+        assertThat(ChunkRole.fromValue("RETRIEVAL")).isEqualTo(ChunkRole.RETRIEVAL);
+        assertThatIllegalArgumentException().isThrownBy(() -> ChunkRole.fromValue("context"));
+    }
+
+    @Test void acceptsBothChunkRolesAndParentForRetrievalChunks() {
+        KnowledgeChunk context = canonicalChunk("parent", null, ChunkRole.CONTEXT, 0);
+        KnowledgeChunk retrieval = canonicalChunk("child", "parent", ChunkRole.RETRIEVAL, 1);
+        assertThat(context.parentChunkId()).isNull();
+        assertThat(context.chunkRole()).isEqualTo(ChunkRole.CONTEXT);
+        assertThat(retrieval.parentChunkId()).isEqualTo("parent");
+        assertThat(retrieval.chunkRole()).isEqualTo(ChunkRole.RETRIEVAL);
+        assertThat(canonicalChunk("chunk", " parent ", ChunkRole.RETRIEVAL, 2).parentChunkId())
+            .isEqualTo(" parent ");
+    }
+
+    @Test void rejectsMissingRoleInvalidParentAndContextWithParent() {
+        assertThatIllegalArgumentException().isThrownBy(() -> canonicalChunk("chunk", null, null, 0));
+        assertThatIllegalArgumentException().isThrownBy(() -> canonicalChunk("chunk", "chunk", ChunkRole.RETRIEVAL, 0));
+        assertThatIllegalArgumentException().isThrownBy(() -> canonicalChunk("chunk", " ", ChunkRole.RETRIEVAL, 0));
+        assertThatIllegalArgumentException().isThrownBy(() -> canonicalChunk("chunk", "x".repeat(33), ChunkRole.RETRIEVAL, 0));
+        assertThatIllegalArgumentException().isThrownBy(() -> canonicalChunk("chunk", "parent", ChunkRole.CONTEXT, 0));
     }
 
     @Test void acceptsFullTextOffsetsLargerThanTheChunkBodyAndSinglePageRanges() {
@@ -86,6 +118,11 @@ class KnowledgeRulesTest {
         var headings = new ArrayList<Heading>();
         headings.add(null);
         assertThatIllegalArgumentException().isThrownBy(() -> chunk(0, "正文", headings, null, null, null, null, null));
+    }
+
+    private static KnowledgeChunk canonicalChunk(String id, String parentId, ChunkRole role, int sequence) {
+        return new KnowledgeChunk(id, "revision", parentId, role, sequence, "正文", null,
+            null, null, null, null, null, NOW);
     }
 
     private static KnowledgeChunk chunk(int sequence, String body, List<Heading> headings, Integer tokens,

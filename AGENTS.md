@@ -281,17 +281,19 @@ SDK 超时要求正整数毫秒且不超过 Integer.MAX_VALUE 毫秒；不保证
 - 服务按用例组织，无 Service/Impl 套层。`KnowledgeBaseService` 创建、详情、列表和改名；名称 trim 后非空白且最多 100 个 Java 字符，允许多库同名。业务 ID 为 32 位 UUID，时钟复用现有 Clock 并截断到微秒。
 - `KnowledgeDocumentService.register(actorUserId,knowledgeBaseId,fileId)` 先校验显式身份及库存在，再通过 `FileContentService.requireOwnedProcessable` 校验源文件。只查询元数据；不得读取正文、调用文件 Mapper 或将文件归属视为知识库授权。新文档 status=1、index_status=pending，活动版本和失败摘要为空。
 - 重复库内文件登记报 `DOCUMENT_ALREADY_REGISTERED`，数据库唯一索引兜底。`KnowledgeRevisionService.create(documentId)` 先确认文档存在，使用 MAX + 1 创建 building 版本；竞争报 `REVISION_NUMBER_CONFLICT`，达到 int 上限报 `REVISION_NUMBER_EXHAUSTED`，不自动重试。新版本 chunk_count=0，created_at/started_at 为进入 building 的时间，摘要、失败信息和其他生命周期时间为空，不修改文档活动版本。
-- `KnowledgeChunkService.saveBatch(revisionId,commands)` 只接受 building 版本。输入没有 revisionId/片段 ID，所有片段由本次入口确定归属并生成新 ID。批次非空、正文非空白、序号非负、批内序号唯一；已存序号冲突报 `CHUNK_SEQUENCE_CONFLICT`，非 building 报 `REVISION_NOT_BUILDING`。不提供正文更新接口。
+- `KnowledgeChunkService.saveBatch(revisionId,commands)` 只接受 building 版本。输入没有 revisionId/片段 ID，所有片段由本次入口确定归属并生成新 ID。批次非空、正文非空白、序号为版本内非负全局顺序且批内唯一，父块和检索块共同占用，不表示原文位置；已存序号冲突报 `CHUNK_SEQUENCE_CONFLICT`，非 building 报 `REVISION_NOT_BUILDING`。不提供正文或关系更新接口。
+- chunk 增加可空 `parent_chunk_id` 与必填、无数据库默认值的 `chunk_role`（CONTEXT/RETRIEVAL），保留版本内序号唯一并增加 `(revision_id,parent_chunk_id,sequence_no)` 索引。CONTEXT 必须无父，RETRIEVAL 可独立或引用同版本的无父 CONTEXT；只支持两层上下文关系，不保存任意深度章节树，不新增物理外键或 SQL CHECK。角色不表示文件格式或 TEXT/TABLE/CODE 内容类别。
+- `SaveKnowledgeChunkCommand.parentSequenceNo` 使用同版本全局序号引用本批或已存父块；服务预分配本批 ID，在版本锁内校验全部关系并转换为业务父 ID，返回仍按输入顺序。缺失父块抛 KnowledgeNotFoundException；缺失角色、负父序号、自引用、CONTEXT 有父及检索块作为父块抛 IllegalArgumentException，在任何插入前拒绝。父查询限定版本、不跨版本回退；原有命令和领域构造器明确创建无父 RETRIEVAL 普通块。父子正文分别保存，chunk_count 统计两种角色全部记录，不等于向量数量。本次不新增父子切分器、角色向量写入或父块检索；后续索引仅选择 RETRIEVAL 并保留活动版本约束。
 - 批次采用追加语义。通过 Spring 注入的服务调用事务入口，使用 READ_COMMITTED 并锁住目标版本；基础设施检查实际连接隔离级别，不兼容的外层事务在写入前明确失败。插入和实际总数更新在同一事务中，写入行数必须符合预期。数据库异常和业务冲突继续传播并回滚整批，兼容外层事务回滚也共同回滚；同版本并发批次串行执行。不自行 new 事务服务，也不添加通用事务框架。
 - `heading_path` 保持有序标题列表，标题层级为正、标题非空白；JSON NULL 与空数组分别还原。使用既有 Jackson 3 和专用类型处理器；MySQL 绑定 JSON 文本，H2 绑定原生 UTF-8 JSON 字节，避免把数组保存成字符串。
-- token_count 可空，有值时非负。偏移同时空或满足 0 <= start_offset < end_offset；页码同时空或满足 1 <= page_start <= page_end。正文保留原样，不以片段长度限制全文偏移，不填充估算的 Token 数量或虚构位置。
+- token_count 可空，有值时非负，表示本行正文的计数，不累计子块。偏移同时空或满足 0 <= start_offset < end_offset，父子使用同一处理后全文 UTF-16 参照而非父块内偏移，无法可靠映射时为空；页码同时空或满足 1 <= page_start <= page_end。正文保留原样，不以片段长度限制全文偏移，不填充估算的 Token 数量或虚构位置。
 - 详情与按关联列表查询对不存在的关联抛 `KnowledgeNotFoundException`；合法但无子记录时返回空列表。版本按版本号升序、片段按 sequence_no 升序。内部异常尚未定义公开 HTTP 错误合同。
 - 知识库只保存自身信息，移除 `owner_user_id` 及其唯一索引。用户访问关系留待后续权限表管理，本次不创建权限表，也不将缺少所有者字段解释为公开访问。
 - 保留库内文件唯一、文档内版本号唯一、版本内片段序号唯一。沿用逻辑关联，不新增物理外键或级联删除；文件归属与活动版本一致性仍需业务校验。
 - 版本表保留整体状态、失败摘要、源文件摘要、片段数量和时间。不保存 `parser_strategy`、`chunking_strategy`、`chunk_size`、`chunk_overlap`、`quality_status`、`normalization_strategy`、`vector_route_key`，片段表同样不保存切片策略；旧实体和 Mapper 不可原样迁入。
 - 不新增 `stage_status`，移除 `cleanup_status`。保留 `cleaned_at` 作为清理完成时间；为空不区分未清理、无需清理或清理失败。
 - 保留偏移、页码和标题信息，但未知时为空。UTF-16 偏移相对于处理后全文，不是原文件字节或 PDF 坐标；源全文持久化、OCR 坐标与 Word 位置在对应需求实现时另行确定。
-- 正式与 H2 schema 同步维护字段、可空性和索引。生产脚本仍手动执行，`IF NOT EXISTS` 不升级旧表；不自动导入历史数据或清理既有向量集合。
+- 正式与 H2 schema 同步维护字段、可空性和索引。生产脚本仍手动执行，`IF NOT EXISTS` 不升级旧表；不自动导入历史数据或清理既有向量集合。缺少父子字段的旧表必须另行手动升级，原有平铺记录保留 ID/版本/序号，回填 parent_chunk_id=NULL、chunk_role=RETRIEVAL 后再约束非空，本次不连接或修改已有数据库。
 
 ### txt/md RAG 构建约定
 
@@ -348,7 +350,7 @@ mvn clean verify
 
 用户行为测试覆盖 HTTP、摘要、服务失败、真实 Mapper SQL、引用切换和请求身份。文件测试覆盖 H2 真 Mapper 生命周期、所有权和状态、实际流大小、摘要、关闭资源、SDK 边界、条件装配及真实容器 multipart 限制。普通测试强制关闭模型，使用 H2 和存储替身，不依赖本机 MySQL、Docker、外部对象存储或个人凭据。
 
-知识库测试覆盖四表真实 Mapper 和字段、同名多库、文件元数据归属、版本号递增及竞争冲突、标题 JSON 和可空位置、UTC 微秒，以及片段排序、计数和事务失败回滚。知识库测试另外覆盖真实 Reader/Splitter、UTF-8、源摘要、流关闭、连续批次与向量元数据、building 互斥、发布回滚、首次失败与重建失败、当前和旧版本清理事实、开关与依赖检查。模型/Qdrant 使用替身，不进行外部调用。事务测试不使用测试外层事务；普通测试仍只访问隔离 H2，不描述为真实 MySQL 或 OpenAI/Qdrant 验证。
+知识库测试覆盖四表真实 Mapper 和字段、同名多库、文件元数据归属、版本号递增及竞争冲突、标题 JSON 和可空位置、UTC 微秒，以及普通块兼容、两种角色及父引用往返、同批和已存父块解析、非法关系拒绝、片段排序、全部角色计数和事务失败回滚。知识库测试另外覆盖真实 Reader/Splitter、UTF-8、源摘要、流关闭、连续批次与向量元数据、building 互斥、发布回滚、首次失败与重建失败、当前和旧版本清理事实、开关与依赖检查。模型/Qdrant 使用替身，不进行外部调用。事务测试不使用测试外层事务；普通测试仍只访问隔离 H2，不描述为真实 MySQL 或 OpenAI/Qdrant 验证。
 
 显式真实 MySQL 验收：先通过进程环境变量配置上表中的 `USER_TEST_DB_*`（仅写入 `.env` 不会生效），再运行 `mvn -Pmysql-it verify`。该 profile 执行正式 schema 和完整 HTTP CRUD，仅清理本次创建的测试记录。H2 验证不能被描述为 MySQL 验证。实际启动验证仍应请求 `GET /api/health`。
 

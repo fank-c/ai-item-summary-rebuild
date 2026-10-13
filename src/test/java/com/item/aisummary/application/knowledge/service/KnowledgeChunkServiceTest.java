@@ -5,6 +5,7 @@ import com.item.aisummary.application.knowledge.command.SaveKnowledgeChunkComman
 import com.item.aisummary.application.knowledge.port.KnowledgeChunkRepository;
 import com.item.aisummary.application.knowledge.port.KnowledgeRevisionRepository;
 import com.item.aisummary.domain.file.model.FileAsset;
+import com.item.aisummary.domain.knowledge.enums.ChunkRole;
 import com.item.aisummary.domain.knowledge.enums.RevisionStatus;
 import com.item.aisummary.domain.knowledge.exception.KnowledgeConflictException;
 import com.item.aisummary.domain.knowledge.exception.KnowledgeNotFoundException;
@@ -80,6 +81,137 @@ class KnowledgeChunkServiceTest {
         assertThat(stored.sourceSha256()).isNull();
         assertThat(stored.completedAt()).isNull();
         assertThat(stored.publishedAt()).isNull();
+    }
+
+    @Test void resolvesSameBatchParentsEvenWhenChildrenComeFirstAndCountsBothRoles() {
+        var saved = chunks.saveBatch(revisionId, List.of(
+            relatedCommand(2, ChunkRole.RETRIEVAL, 0),
+            relatedCommand(0, ChunkRole.CONTEXT, null),
+            relatedCommand(1, ChunkRole.RETRIEVAL, 0), command(3)));
+        var parent = saved.get(1);
+        assertThat(parent.chunkRole()).isEqualTo(ChunkRole.CONTEXT);
+        assertThat(parent.parentChunkId()).isNull();
+        assertThat(saved.get(0).parentChunkId()).isEqualTo(parent.id());
+        assertThat(saved.get(2).parentChunkId()).isEqualTo(parent.id());
+        assertThat(saved.get(3).chunkRole()).isEqualTo(ChunkRole.RETRIEVAL);
+        assertThat(saved.get(3).parentChunkId()).isNull();
+        assertThat(chunks.findByRevisionId(revisionId)).extracting(KnowledgeChunk::sequenceNo)
+            .containsExactly(0, 1, 2, 3);
+        saved.forEach(chunk -> assertThat(chunks.findById(chunk.id())).isEqualTo(chunk));
+        assertThat(revisions.findById(revisionId).chunkCount()).isEqualTo(4);
+    }
+
+    @Test void appendsChildrenToAnAlreadySavedContextParent() {
+        var parent = chunks.saveBatch(revisionId, List.of(relatedCommand(0, ChunkRole.CONTEXT, null))).getFirst();
+        var children = chunks.saveBatch(revisionId, List.of(
+            relatedCommand(1, ChunkRole.RETRIEVAL, 0), relatedCommand(2, ChunkRole.RETRIEVAL, 0)));
+        assertThat(children).allSatisfy(child -> {
+            assertThat(child.parentChunkId()).isEqualTo(parent.id());
+            assertThat(child.revisionId()).isEqualTo(parent.revisionId());
+            assertThat(child.chunkRole()).isEqualTo(ChunkRole.RETRIEVAL);
+        });
+        assertThat(revisions.findById(revisionId).chunkCount()).isEqualTo(3);
+    }
+
+    @Test void rejectsMissingParentBeforeInsertingAnyMemberOfTheBatch() {
+        assertThatExceptionOfType(KnowledgeNotFoundException.class).isThrownBy(() ->
+            chunks.saveBatch(revisionId, List.of(command(1), relatedCommand(2, ChunkRole.RETRIEVAL, 99))));
+        assertThat(chunks.findByRevisionId(revisionId)).isEmpty();
+        assertThat(revisions.findById(revisionId).chunkCount()).isZero();
+    }
+
+    @Test void doesNotResolveAParentFromAnotherRevision() {
+        var other = revisions.create(revisions.findById(revisionId).knowledgeDocumentId());
+        var foreign = chunks.saveBatch(other.id(), List.of(relatedCommand(0, ChunkRole.CONTEXT, null))).getFirst();
+        assertThatExceptionOfType(KnowledgeNotFoundException.class).isThrownBy(() ->
+            chunks.saveBatch(revisionId, List.of(relatedCommand(1, ChunkRole.RETRIEVAL, 0))));
+        assertThat(chunks.findByRevisionId(revisionId)).isEmpty();
+        assertThat(revisions.findById(revisionId).chunkCount()).isZero();
+        var local = chunks.saveBatch(revisionId, List.of(relatedCommand(0, ChunkRole.CONTEXT, null))).getFirst();
+        var child = chunks.saveBatch(revisionId, List.of(relatedCommand(1, ChunkRole.RETRIEVAL, 0))).getFirst();
+        assertThat(child.parentChunkId()).isEqualTo(local.id()).isNotEqualTo(foreign.id());
+    }
+
+    @Test void rejectsRetrievalParentsInTheSameOrAnEarlierBatch() {
+        assertThatIllegalArgumentException().isThrownBy(() -> chunks.saveBatch(revisionId, List.of(
+            command(0), relatedCommand(1, ChunkRole.RETRIEVAL, 0))));
+        assertThat(chunks.findByRevisionId(revisionId)).isEmpty();
+        var original = chunks.saveBatch(revisionId, List.of(command(0))).getFirst();
+        assertThatIllegalArgumentException().isThrownBy(() -> chunks.saveBatch(revisionId, List.of(
+            relatedCommand(1, ChunkRole.CONTEXT, null), relatedCommand(2, ChunkRole.RETRIEVAL, 0))));
+        assertThat(chunks.findByRevisionId(revisionId)).containsExactly(original);
+        assertThat(revisions.findById(revisionId).chunkCount()).isEqualTo(1);
+    }
+
+    @Test void rejectsMissingRolesSelfReferencesNegativeReferencesAndContextChildren() {
+        for (var bad : List.of(
+                relatedCommand(1, null, null),
+                relatedCommand(1, ChunkRole.RETRIEVAL, 1),
+                relatedCommand(1, ChunkRole.RETRIEVAL, -1),
+                relatedCommand(1, ChunkRole.CONTEXT, 0))) {
+            assertThatIllegalArgumentException().isThrownBy(() -> chunks.saveBatch(revisionId, List.of(
+                relatedCommand(0, ChunkRole.CONTEXT, null), bad)));
+            assertThat(chunks.findByRevisionId(revisionId)).isEmpty();
+            assertThat(revisions.findById(revisionId).chunkCount()).isZero();
+        }
+        assertThatIllegalArgumentException().isThrownBy(() -> chunks.saveBatch(revisionId, List.of(
+            relatedCommand(0, ChunkRole.RETRIEVAL, 1), relatedCommand(1, ChunkRole.RETRIEVAL, 0))));
+        assertThat(chunks.findByRevisionId(revisionId)).isEmpty();
+    }
+
+    @Test void parentChildInsertFailureRollsBackBothRolesAndCount() {
+        jdbc.execute("ALTER TABLE knowledge_chunk ADD CONSTRAINT fixture_child_guard CHECK (sequence_no <> 2)");
+        try {
+            assertThatThrownBy(() -> chunks.saveBatch(revisionId, List.of(
+                relatedCommand(0, ChunkRole.CONTEXT, null), relatedCommand(1, ChunkRole.RETRIEVAL, 0),
+                relatedCommand(2, ChunkRole.RETRIEVAL, 0))))
+                .isInstanceOf(DataIntegrityViolationException.class);
+            assertThat(chunks.findByRevisionId(revisionId)).isEmpty();
+            assertThat(revisions.findById(revisionId).chunkCount()).isZero();
+        } finally {
+            jdbc.execute("ALTER TABLE knowledge_chunk DROP CONSTRAINT fixture_child_guard");
+        }
+    }
+
+    @Test void parentChildCountFailureRollsBackBothRoles() {
+        jdbc.execute("ALTER TABLE knowledge_document_revision ADD CONSTRAINT fixture_parent_count_guard CHECK (chunk_count = 0)");
+        try {
+            assertThatThrownBy(() -> chunks.saveBatch(revisionId, List.of(
+                relatedCommand(0, ChunkRole.CONTEXT, null), relatedCommand(1, ChunkRole.RETRIEVAL, 0))))
+                .isInstanceOf(DataIntegrityViolationException.class);
+            assertThat(chunks.findByRevisionId(revisionId)).isEmpty();
+            assertThat(revisions.findById(revisionId).chunkCount()).isZero();
+        } finally {
+            jdbc.execute("ALTER TABLE knowledge_document_revision DROP CONSTRAINT fixture_parent_count_guard");
+        }
+    }
+
+    @Test void existingGlobalSequenceConflictRollsBackNewParentChildRows() {
+        var original = chunks.saveBatch(revisionId, List.of(command(0))).getFirst();
+        assertThatThrownBy(() -> chunks.saveBatch(revisionId, List.of(
+            relatedCommand(1, ChunkRole.RETRIEVAL, 0), relatedCommand(0, ChunkRole.CONTEXT, null))))
+            .isInstanceOf(KnowledgeConflictException.class).extracting("code").isEqualTo("CHUNK_SEQUENCE_CONFLICT");
+        assertThat(chunks.findByRevisionId(revisionId)).containsExactly(original);
+        assertThat(revisions.findById(revisionId).chunkCount()).isEqualTo(1);
+    }
+
+    @Test void concurrentChildrenOfAnExistingParentKeepRelationsAndActualCount() throws Exception {
+        var parent = chunks.saveBatch(revisionId, List.of(relatedCommand(0, ChunkRole.CONTEXT, null))).getFirst();
+        var barrier = new CyclicBarrier(2);
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var first = executor.submit(() -> {
+                barrier.await(10, TimeUnit.SECONDS);
+                return chunks.saveBatch(revisionId, List.of(relatedCommand(1, ChunkRole.RETRIEVAL, 0)));
+            });
+            var second = executor.submit(() -> {
+                barrier.await(10, TimeUnit.SECONDS);
+                return chunks.saveBatch(revisionId, List.of(relatedCommand(2, ChunkRole.RETRIEVAL, 0)));
+            });
+            assertThat(first.get(15, TimeUnit.SECONDS).getFirst().parentChunkId()).isEqualTo(parent.id());
+            assertThat(second.get(15, TimeUnit.SECONDS).getFirst().parentChunkId()).isEqualTo(parent.id());
+        }
+        assertThat(chunks.findByRevisionId(revisionId)).extracting(KnowledgeChunk::sequenceNo).containsExactly(0, 1, 2);
+        assertThat(revisions.findById(revisionId).chunkCount()).isEqualTo(3);
     }
 
     @Test void sameSequenceIsAllowedInDifferentVersionsAndReadsRemainScoped() {
@@ -207,6 +339,11 @@ class KnowledgeChunkServiceTest {
         }
         assertThat(chunks.findByRevisionId(revisionId)).extracting(KnowledgeChunk::sequenceNo).containsExactly(0, 1);
         assertThat(revisions.findById(revisionId).chunkCount()).isEqualTo(2);
+    }
+
+    private static SaveKnowledgeChunkCommand relatedCommand(int sequence, ChunkRole role, Integer parentSequence) {
+        return new SaveKnowledgeChunkCommand(parentSequence, role, sequence, "正文 " + sequence,
+            null, null, null, null, null, null);
     }
 
     private static SaveKnowledgeChunkCommand command(int sequence) {
