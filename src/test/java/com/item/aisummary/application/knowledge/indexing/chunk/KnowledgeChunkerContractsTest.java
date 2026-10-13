@@ -7,6 +7,11 @@ import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
+/**
+ * 内容切分相关数据合同与草稿模型单元测试。
+ *
+ * <p>验证平铺与父子 ChunkGroupDraft、ChunkDraft 的只读不可变性、防御性拷贝及约束校验。
+ */
 class KnowledgeChunkerContractsTest {
     @Test
     void acceptsFlatAndParentChildGroupsAndSnapshotsRetrievals() {

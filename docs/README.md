@@ -15,7 +15,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
-| [运行指南](./guides/getting-started.md) | 准备 MySQL、建表、创建 `.env`、启动应用、启用文件存储与了解 RAG 构建骨架状态 |
+| [运行指南](./guides/getting-started.md) | 准备 MySQL、建表、创建 `.env`、启动应用、启用文件存储与了解 RAG 构建状态与依赖边界 |
 | [测试说明](./guides/testing.md) | 普通测试、定向测试、真实 MySQL 用户验收及验证边界 |
 
 ## 架构与模块
@@ -25,7 +25,7 @@
 | [工程结构](./architecture.md) | 四层职责、包结构、依赖方向、请求身份、公共错误与 UTC 时间 |
 | [用户模块](./modules/user.md) | CRUD、密码处理、按意图更新字段、逻辑删除和用户引用 |
 | [文件模块](./modules/file.md) | 两次读流、元数据与对象存储、归属校验、签名和资源管理 |
-| [知识库模块](./modules/knowledge.md) | 内部服务、RAG 策略合同与固定编排、向量适配、版本发布及当前实现边界 |
+| [知识库模块](./modules/knowledge.md) | 内部服务、TXT/Markdown 生产解析规则、Token 预算切分规则、RAG 固定编排、向量适配、版本发布及当前实现边界 |
 
 ## 参考资料
 

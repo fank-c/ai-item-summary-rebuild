@@ -63,6 +63,19 @@ import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+/**
+ * 知识库构建核心编排服务（KnowledgeIndexBuildService）端到端集成测试。
+ *
+ * <p>使用测试策略替身验证全量构建流程的各个边界：
+ * <ul>
+ *   <li>大组独立保存与跨组凑批、仅 RETRIEVAL 写入向量库及末尾 flush 尾批。</li>
+ *   <li>源文件读取前校验、摘要不匹配拦截与流资源关闭。</li>
+ *   <li>解析/切分策略缺失拦截、FLAT 模式禁止父块校验。</li>
+ *   <li>向量部分写入失败触发当前版本清理并保留旧活动版本。</li>
+ *   <li>发布事务 SQL 失败时版本指针不切换、派生向量保留待核对。</li>
+ *   <li>Propagation.NEVER 拒绝外层事务，以及文档 BUILDING 互斥锁定。</li>
+ * </ul>
+ */
 @SpringBootTest
 @Import(KnowledgeIndexBuildServiceTest.Configuration.class)
 class KnowledgeIndexBuildServiceTest {

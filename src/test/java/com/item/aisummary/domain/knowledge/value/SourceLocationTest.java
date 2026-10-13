@@ -5,6 +5,11 @@ import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException
 
 import org.junit.jupiter.api.Test;
 
+/**
+ * 来源位置值对象（SourceLocation）业务规则单元测试。
+ *
+ * <p>验证偏移成对（0 &lt;= start &lt; end）与页码成对（1 &lt;= start &lt;= end）规则，以及允许全为空白的合法性。
+ */
 class SourceLocationTest {
     @Test
     void acceptsAllUnknownOrCompleteIndependentPositionPairs() {

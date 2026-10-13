@@ -10,6 +10,11 @@ import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
+/**
+ * 文档格式解析相关数据合同（ParsedDocument、ContentBlock）单元测试。
+ *
+ * <p>验证阅读顺序从 0 连续性、不可修改列表防御、未识别位置保持 null 以及 toString 日志脱敏。
+ */
 class KnowledgeParseContractsTest {
     @Test
     void preservesContentAndOptionalMetadataWithoutInventingPositions() {

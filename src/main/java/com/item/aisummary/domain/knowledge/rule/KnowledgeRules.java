@@ -1,6 +1,11 @@
 package com.item.aisummary.domain.knowledge.rule;
 
-/** 知识库输入规则；全文偏移与片段正文长度没有直接对应关系。 */
+/**
+ * 知识库业务校验规则集中工具类。
+ *
+ * <p>封装知识库名称、业务 UUID、知识片段及其位置信息的有效性断言规则。
+ * 领域实体与值对象通过本类进行防腐校验，集中保持知识库各模型之间约束的一致性。
+ */
 public final class KnowledgeRules {
     private KnowledgeRules() {}
 
@@ -87,9 +92,23 @@ public final class KnowledgeRules {
     }
 
     /**
-     * 校验来源位置；未知范围允许为空，已知范围必须成对且满足全文偏移或页码约束。
+     * 校验来源位置范围的几何合法性与成对约束。
      *
-     * <p>只校验范围形状，不证明其来源可靠性，也不以片段正文长度限制全文偏移。
+     * <p>规则约束：
+     * <ul>
+     *   <li>偏移成对：字符偏移 {@code startOffset} 与 {@code endOffset} 必须同时为空，
+     *       或者同时非空且满足 {@code 0 <= startOffset < endOffset}。偏移量为处理后全文的 UTF-16 字符半开区间，
+     *       不受片段当前文本长度限制。</li>
+     *   <li>页码成对：起始页码 {@code pageStart} 与结束页码 {@code pageEnd} 必须同时为空，
+     *       或者同时非空且满足 {@code 1 <= pageStart <= pageEnd}。</li>
+     * </ul>
+     * 未知位置允许为 null，但不允许单边缺失或反向范围。
+     *
+     * @param startOffset 处理后全文中的 UTF-16 起始偏移；可选
+     * @param endOffset 处理后全文中的 UTF-16 结束偏移（半开区间）；可选
+     * @param pageStart 源文件中的起始页码（从 1 开始）；可选
+     * @param pageEnd 源文件中的结束页码（包含该页）；可选
+     * @throws IllegalArgumentException 当任意一项成对约束或取值范围不合法时抛出
      */
     public static void requireLocation(
             Integer startOffset, Integer endOffset, Integer pageStart, Integer pageEnd) {

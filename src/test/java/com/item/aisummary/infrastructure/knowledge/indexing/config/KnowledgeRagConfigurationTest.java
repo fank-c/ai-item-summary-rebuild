@@ -30,6 +30,17 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+/**
+ * RAG 条件装配（KnowledgeRagConfiguration）单元测试。
+ *
+ * <p>基于 ApplicationContextRunner 验证条件装配的前置断言边界：
+ * <ul>
+ *   <li>RAG 关闭时不依赖任何 AI 模型或策略 Bean。</li>
+ *   <li>开启但缺少格式解析策略或缺少 FLAT 分块策略时拒绝启动。</li>
+ *   <li>开启但缺少 EmbeddingModel 或 VectorStore 时拒绝启动。</li>
+ *   <li>依赖齐全时成功装配全套内部构建 Bean 拓扑。</li>
+ * </ul>
+ */
 class KnowledgeRagConfigurationTest {
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withUserConfiguration(KnowledgeRagConfiguration.class, TestBeans.class);

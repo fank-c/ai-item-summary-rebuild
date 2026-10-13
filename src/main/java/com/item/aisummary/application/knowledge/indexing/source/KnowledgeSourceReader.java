@@ -19,7 +19,7 @@ import java.util.HexFormat;
  *   <li>读取过程中累计实际字节大小；若超过 {@code maxSourceSize} 预算立即中断，防止恶意超大文件消耗内存。</li>
  *   <li>消费完毕后比对实际读入的字节大小与文件元数据记录的大小，并比对计算所得 SHA-256 摘要与文件元数据摘要。</li>
  *   <li>校验通过后将受控字节数组包装为 {@link PreparedSource}，供后续解析器重复读取。</li>
- *   <li>不进行公共字符集解码；文本 UTF-8 严格验证由未来对应的文本解析器负责。</li>
+ *   <li>不进行公共字符集解码；文本 UTF-8 严格验证由对应的文本解析器负责。</li>
  * </ul>
  */
 public final class KnowledgeSourceReader {

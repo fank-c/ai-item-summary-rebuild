@@ -14,11 +14,13 @@ import org.springframework.util.unit.DataSize;
  * <ul>
  *   <li>{@code enabled}：总开关，默认 {@code false}；开启后才触发 {@link KnowledgeRagConfiguration} 条件装配。</li>
  *   <li>{@code batchSize}：数据库分组追加与向量缓冲批量推送的目标大小（范围 1 到 1024，默认 128）。</li>
- *   <li>{@code chunkSize}：切分策略的目标尺寸阈值（必须为正数，默认 512）。</li>
- *   <li>{@code minChunkSizeChars}：标点符号截断的最小字符数（非负，默认 200）。</li>
+ *   <li>{@code chunkSize}：切分策略的目标子块尺寸上限（Token 单位，必须为正数，默认 512）。</li>
+ *   <li>{@code parentChunkSize}：切分策略的目标父块尺寸上限（Token 单位，必须大于或等于 {@code chunkSize}，默认 2048）。</li>
+ *   <li>{@code chunkOverlap}：切分策略的目标子块重叠尺寸（Token 单位，范围 0 &lt;= chunkOverlap &lt; chunkSize，默认 0）。</li>
+ *   <li>{@code minChunkSizeChars}：标点符号截断的最小字符数短块软阈值（非负，默认 200）。</li>
  *   <li>{@code minChunkLengthToEmbed}：允许向量化的最小字符长度（首版严格限制为 0，防止静默丢弃短文本）。</li>
  *   <li>{@code maxNumChunks}：单个文档允许生成的最大片段总数，包含 CONTEXT 与 RETRIEVAL（正整数，默认 100000）。</li>
- *   <li>{@code keepSeparator}：切分时是否保留标点符号，传给切分策略（默认 true）。</li>
+ *   <li>{@code keepSeparator}：切分时是否保留标点符号/换行符，传给切分策略（默认 true）。</li>
  *   <li>{@code punctuationMarks}：用于句子断句的中英文标点与换行符集合（非空，默认 {@code .?!;。？！；\n}）。</li>
  *   <li>{@code maxSourceSize}：源文件允许的最大字节大小（必须为正且小于 Integer.MAX_VALUE 字节，默认 20MB）。</li>
  * </ul>
@@ -29,8 +31,12 @@ public record KnowledgeRagProperties(
         @DefaultValue("false") boolean enabled,
         /** 每次保存或写入向量的目标批量大小。 */
         @DefaultValue("128") int batchSize,
-        /** 切分策略可用的目标尺寸。 */
+        /** 切分策略可用的目标尺寸（Token 单位）。 */
         @DefaultValue("512") int chunkSize,
+        /** 切分策略可用的父上下文块目标尺寸（Token 单位）。 */
+        @DefaultValue("2048") int parentChunkSize,
+        /** 切分策略可用的子检索块重叠目标尺寸（Token 单位）。 */
+        @DefaultValue("0") int chunkOverlap,
         /** 切分策略可用的最小尺寸阈值。 */
         @DefaultValue("200") int minChunkSizeChars,
         /** 最小向量文本长度；当前仅允许零，避免静默丢弃短块。 */
@@ -50,6 +56,12 @@ public record KnowledgeRagProperties(
         }
         if (chunkSize < 1) {
             throw new IllegalArgumentException("RAG 切片尺寸必须为正数");
+        }
+        if (parentChunkSize < chunkSize) {
+            throw new IllegalArgumentException("RAG 父块尺寸必须大于或等于子块尺寸");
+        }
+        if (chunkOverlap < 0 || chunkOverlap >= chunkSize) {
+            throw new IllegalArgumentException("RAG 重叠尺寸必须满足 0 <= chunkOverlap < chunkSize");
         }
         if (minChunkSizeChars < 0) {
             throw new IllegalArgumentException("RAG 最小切片尺寸不能为负数");
@@ -78,6 +90,8 @@ public record KnowledgeRagProperties(
                 minChunkLengthToEmbed,
                 maxNumChunks,
                 keepSeparator,
-                punctuationMarks);
+                punctuationMarks,
+                parentChunkSize,
+                chunkOverlap);
     }
 }

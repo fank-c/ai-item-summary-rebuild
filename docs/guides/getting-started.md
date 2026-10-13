@@ -89,16 +89,16 @@ JAR 启动和 IDE 运行都应使用 Java 21，并把工作目录设为项目根
 
 IDE 中运行 `com.item.aisummary.AiItemSummaryApplication` 即可。配置不存在时应用仍可加载默认值，但用户、文件及知识库元数据操作需要有效数据库连接。
 
-## 6. RAG 构建骨架状态
+## 6. RAG 构建状态与依赖边界
 
-当前应用实现了固定 RAG 编排和 Spring AI 向量适配，但没有生产文档解析器或分块器。默认 RAG 关闭；若只将开关设为 true，策略缺失会导致启动失败。即使补充 MySQL、对象存储、OpenAI 和 Qdrant 凭据，也不能仅靠配置启用真实 txt/md 入库；不要按外部验收流程创建资源或调用构建入口。
+当前应用实现了 TXT 与 Markdown 生产文档解析器、`TokenBudgetKnowledgeChunker`（支持 FLAT 与 PARENT_CHILD 两种模式）、固定 RAG 编排和 Spring AI 向量适配。默认保持 RAG 关闭；新增 `KnowledgeParserConfiguration` 与 `KnowledgeChunkerConfiguration` 在 RAG 开启时分别注册生产解析器与切分策略。显式开启 RAG（`APP_KNOWLEDGE_RAG_ENABLED=true`）但缺少 OpenAI Embedding 或 Qdrant 等外部依赖或配置时仍拒绝启动；解析与切分实现不代表真实外部服务已验收或生产端到端完成，不要按外部验收流程创建线上资源或调用外部构建。
 
-应用合同包括原始字节限量预读与 SHA-256 校验、解析/分块策略 ports、可选 CONTEXT 与 RETRIEVAL 的组式保存、仅 RETRIEVAL 的向量批次及版本发布。预读器不执行 UTF-8 解码；文本解析器的 UTF-8 校验、txt/md 解析、FLAT/PARENT_CHILD 切分以及真实外部调用尚未实现或验收。`FileFormat` 中支持枚举也不代表有对应解析实现。
+应用合同包括原始字节限量预读与 SHA-256 校验、解析与切分策略、可选 CONTEXT 与 RETRIEVAL 的组式保存、仅 RETRIEVAL 的向量批次及版本发布。预读器不执行 UTF-8 解码；由生产 TXT/MD 解析器通过 `Utf8TextDecoder` 负责严格 UTF-8 校验与换行规整。切分策略基于本地 CL100K_BASE Token 预算，普通文本合并同路径范围，CODE/TABLE 独立隔离，父块不重叠，子块支持重叠且向后推进新内容。解析器与切分器行为已通过单测真实调用验证（无网络调用），并在隔离 H2 下通过 `KnowledgeChunkingBuildIntegrationTest` 覆盖本地构建链路与发布流转（该测试清楚非外部端到端），真实外部 MySQL、模型/Qdrant 调用及 PDF/DOCX 解析尚未验收。`FileFormat` 中声明 TXT/MD/PDF/DOCX 路由类型，当前已支持 TXT 与 MD 生产解析，PDF/DOCX 暂未实现。
 
-内部两参数入口 `KnowledgeIndexBuildService.build(actorUserId,documentId)` 默认选择 FLAT；第三参数可指定 PARENT_CHILD，但必须注册对应策略。无新增环境变量控制模式。现有 RAG 环境变量和默认值、精确组/向量批次语义见 [配置说明](../reference/configuration.md#rag-构建配置)，完整合同见[知识库模块](../modules/knowledge.md)。
+内部两参数入口 `KnowledgeIndexBuildService.build(actorUserId,documentId)` 默认选择 FLAT；第三参数可指定 PARENT_CHILD。模式不对应环境变量，策略由应用注册。RAG 环境变量（含新增的 `RAG_PARENT_CHUNK_SIZE` 与 `RAG_CHUNK_OVERLAP`）和默认值、精确组/向量批次语义见 [配置说明](../reference/configuration.md#rag-构建配置)，完整切分规则与解析合同见[知识库模块](../modules/knowledge.md)。
 
 ## 后续学习
 
-启用聊天模型时提供 `SPRING_AI_MODEL_CHAT=openai`、`OPENAI_API_KEY` 和需要的 `OPENAI_MODEL`。当前没有聊天用例；RAG 固定编排与向量适配已实现，但解析、分块策略、检索与问答尚未实现。
+启用聊天模型时提供 `SPRING_AI_MODEL_CHAT=openai`、`OPENAI_API_KEY` 和需要的 `OPENAI_MODEL`。当前没有聊天用例；TXT/Markdown 生产解析器、TokenBudgetKnowledgeChunker 切分策略、RAG 固定编排与向量适配已实现，检索与问答尚未实现。
 
 知识库内部调用见 [模块说明](../modules/knowledge.md)，现有四表见 [表结构说明](../reference/database/knowledge.md)。运行验证与真实 MySQL 用户验收见 [测试说明](./testing.md)。

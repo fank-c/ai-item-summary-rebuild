@@ -52,6 +52,8 @@ app:
       enabled: ${APP_KNOWLEDGE_RAG_ENABLED:false}
       batch-size: ${RAG_BATCH_SIZE:128}
       chunk-size: ${RAG_CHUNK_SIZE:512}
+      parent-chunk-size: ${RAG_PARENT_CHUNK_SIZE:2048}
+      chunk-overlap: ${RAG_CHUNK_OVERLAP:0}
       min-chunk-size-chars: ${RAG_MIN_CHUNK_SIZE_CHARS:200}
       min-chunk-length-to-embed: ${RAG_MIN_CHUNK_LENGTH_TO_EMBED:0}
       max-num-chunks: ${RAG_MAX_NUM_CHUNKS:100000}

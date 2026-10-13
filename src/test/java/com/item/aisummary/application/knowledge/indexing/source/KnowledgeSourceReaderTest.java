@@ -11,6 +11,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+/**
+ * 原字节读取器（KnowledgeSourceReader）单元测试。
+ *
+ * <p>验证源文件内容流的受控读取：
+ * <ul>
+ *   <li>流完整消费至 EOF，流关闭责任由调用者承担。</li>
+ *   <li>文件大小预算严格检查（超限立即中断）。</li>
+ *   <li>边读边计算 SHA-256，与源文件记录严格核对。</li>
+ *   <li>不进行公共字符集解码，支持二进制字节保留。</li>
+ * </ul>
+ */
 class KnowledgeSourceReaderTest {
     @Test void readsBinaryBytesToEofBeforeParsingAndLeavesStreamOwnershipToCaller() throws Exception {
         byte[] bytes = {(byte) 0xff, 0, (byte) 0xfe};

@@ -15,6 +15,12 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+/**
+ * 策略路由注册表（KnowledgeProcessingRouter）单元测试。
+ *
+ * <p>验证解析格式（FileFormat）与分块模式（ChunkingMode）的独立策略路由查找、
+ * 杜绝重复注册与模糊选择、以及未注册时抛出显式状态异常。
+ */
 class KnowledgeProcessingRouterTest {
     @Test void selectsParserAndChunkerIndependentlyAndDoesNotInvokeAlgorithms() {
         var txt = parser(FileFormat.TXT);

@@ -21,6 +21,17 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.Filter;
 
+/**
+ * 基于 Spring AI 的向量索引适配器（SpringAiKnowledgeVectorIndex）单元测试。
+ *
+ * <p>使用 VectorStore Mock 验证：
+ * <ul>
+ *   <li>已持久化检索片段向标准连字符 UUID Document 的转换。</li>
+ *   <li>包含来源、角色与可选 parent_chunk_id 的完整元数据写入。</li>
+ *   <li>按 revision_id 等值过滤的精准物理删除。</li>
+ *   <li>底层 SDK 异常向安全业务异常的转换（不泄露供应商底层消息）。</li>
+ * </ul>
+ */
 class SpringAiKnowledgeVectorIndexTest {
     private static final String BASE_ID = "00000000000000000000000000000001";
     private static final String DOC_ID = "00000000000000000000000000000002";

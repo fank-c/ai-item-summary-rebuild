@@ -26,6 +26,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+/**
+ * 分块组转换器（KnowledgeChunkGroupWriter）集成测试。
+ *
+ * <p>基于隔离 H2 验证整组片段向底层 {@link KnowledgeChunkService#saveBatch} 命令的转换与持久化：
+ * <ul>
+ *   <li>验证按组映射后的父子关系（同版本 parent_chunk_id 指向 CONTEXT 块）。</li>
+ *   <li>验证全角色片段的 sequence_no 连续分配与版本的 chunk_count 准确累计。</li>
+ *   <li>验证单组内或多组中出现数据库异常时整批回滚，以及越界序号的提前拦截。</li>
+ * </ul>
+ */
 @SpringBootTest
 @Import(KnowledgeChunkGroupWriterTest.WriterTestConfiguration.class)
 class KnowledgeChunkGroupWriterTest {

@@ -21,7 +21,7 @@ web ───────────────→ application ─────
 | `web` | Controller、请求校验、响应字段映射、HTTP 异常处理 | 不直接操作数据库或 SDK，不承载业务规则 |
 | `application` | 用户、文件与知识库用例、请求身份、跨模块引用及外部能力 port | 通过接口调用仓储、密码摘要或对象存储，不依赖其实现 |
 | `domain` | 用户数据与文本规则、文件归属、知识库记录与片段位置规则 | 不依赖 Spring、MyBatis 或供应商 SDK |
-| `infrastructure` | 构造器装配、MyBatis、BCrypt、模拟身份、存储 SDK 与知识库 Spring AI 向量适配 | 实现应用接口，处理外部协议、生命周期与异常转换；当前没有生产解析器/分块器 |
+| `infrastructure` | 构造器装配、MyBatis、BCrypt、模拟身份、存储 SDK、TXT/Markdown 生产解析器、TokenBudgetKnowledgeChunker 与知识库 Spring AI 向量适配 | 实现应用接口，处理外部协议、生命周期与异常转换；已实现 TXT/MD 生产解析器与 FLAT/PARENT_CHILD 生产分块器，缺外部后端仍拒启动 |
 
 `port` 是应用定义的外部能力接口。例：用户服务只认识 `PasswordHasher`，BCrypt 的具体编码器留在基础设施；文件服务只认识 `UploadSource`，MultipartFile 留在 Web 层。
 
@@ -42,7 +42,7 @@ web ───────────────→ application ─────
 | `domain.user` | `model`、`exception` | 用户数据和未找到异常 |
 | `domain.file` | `model`、`rule`、`exception` | 文件数据、文本规则与业务异常 |
 | `domain.knowledge` | `model`、`value`、`enums`、`rule`、`exception` | 四表记录、标题及 `SourceLocation` 值对象、状态、输入规则与异常；位置约束由 `KnowledgeRules.requireLocation` 提供 |
-| `infrastructure.user / file / knowledge` | 基础 `config`、`persistence`，以及已有 `reference / storage`；知识库另有 `indexing/config`、`indexing/vector` | 基础装配和持久化保持原位；RAG 条件装配/Properties 与 Spring AI 向量适配归入 indexing |
+| `infrastructure.user / file / knowledge` | 基础 `config`、`persistence`，以及已有 `reference / storage`；知识库另有 `indexing/config`、`indexing/parse`、`indexing/chunk`、`indexing/vector` | 基础装配和持久化保持原位；RAG 条件装配/Properties/Parser/Chunker 装配、TXT/MD 生产解析器、TokenBudget 切分器与 Spring AI 向量适配归入 indexing |
 | `infrastructure.auth` | `config`、`web` | 模拟身份配置与请求集成 |
 | `infrastructure.persistence.typehandler`、`infrastructure.time` | 公共基础能力 | UTC 类型转换与共享时钟 |
 
@@ -59,7 +59,7 @@ indexing/
 
 这些类型是处理合同、编排服务或外部能力接口，不是数据库实体或具体解析/分块算法。构建服务通过 `KnowledgeProcessingRouter` 选择 parser 与 chunker；组写入器把构建组转成基础 `SaveKnowledgeChunkCommand`，并调用基础 `KnowledgeChunkService.saveBatch`。基础服务不反向依赖 indexing。`KnowledgeChunkService` 与四个基础仓储 port 继续位于原有 `service`、`port` 包。
 
-知识库基础设施的 `config/KnowledgeConfiguration` 和全部 `persistence` 保持不动；RAG 专用 `KnowledgeRagConfiguration`、`KnowledgeRagProperties` 位于 `infrastructure.knowledge.indexing.config`，Spring AI 向量适配位于 `infrastructure.knowledge.indexing.vector`。`SourceLocation` 留在 `domain.knowledge.value`，其偏移/页码规则由 `KnowledgeRules.requireLocation` 校验。
+知识库基础设施的 `config/KnowledgeConfiguration` 和全部 `persistence` 保持不动；RAG 条件装配 `KnowledgeRagConfiguration`、`KnowledgeParserConfiguration`、`KnowledgeChunkerConfiguration` 与 `KnowledgeRagProperties` 位于 `infrastructure.knowledge.indexing.config`，生产解析器 `TextKnowledgeDocumentParser`、`MarkdownKnowledgeDocumentParser` 与 `Utf8TextDecoder` 位于 `infrastructure.knowledge.indexing.parse`，生产分块策略 `TokenBudgetKnowledgeChunker`、`JTokkitTokenBudget`、`SourceMappedText` 与 `TokenRangeSplitter` 位于 `infrastructure.knowledge.indexing.chunk`，Spring AI 向量适配位于 `infrastructure.knowledge.indexing.vector`。`SourceLocation` 留在 `domain.knowledge.value`，其偏移/页码规则由 `KnowledgeRules.requireLocation` 校验。
 
 ```mermaid
 graph LR
@@ -82,8 +82,10 @@ graph LR
 infrastructure/knowledge/
 ├── config/            # 基础 KnowledgeConfiguration
 ├── indexing/
-│   ├── config/        # RAG 条件装配、KnowledgeRagProperties
-│   └── vector/        # 已实现的 Spring AI 向量适配（没有生产 Reader/Splitter）
+│   ├── chunk/         # 生产分块策略：TokenBudgetKnowledgeChunker、JTokkitTokenBudget、SourceMappedText、TokenRangeSplitter
+│   ├── config/        # RAG 条件装配、KnowledgeParserConfiguration、KnowledgeChunkerConfiguration、KnowledgeRagProperties
+│   ├── parse/         # 生产 TXT 与 Markdown 解析器、Utf8TextDecoder
+│   └── vector/        # 已实现的 Spring AI 向量适配
 └── persistence/
     ├── entity/        # 四表数据库实体
     ├── mapper/        # 四个 Mapper，封装 SQL 入口
@@ -134,9 +136,9 @@ MySQL 的 `DATETIME(6)` 不保存时区。[UtcInstantTypeHandler](../src/main/ja
 
 模型和存储默认关闭；普通测试使用 H2、Mock 或内存存储替身。健康接口不探测这些外部服务。
 
-Spring AI 依赖用于未来模型能力与当前向量适配。当前已实现的 RAG 固定骨架包含专用 indexing 合同、格式/模式路由、预读原始字节并核对大小与 SHA-256、组式 chunk writer、向量批次和版本生命周期；没有生产文档解析器或分块器，也没有生产 `TextReader`、`MarkdownDocumentReader` 或 `TokenTextSplitter` 流程。`PreparedSource` 保存同一份已验证原始字节，但不执行 UTF-8 解码；未来文本解析器负责该校验。
+Spring AI 依赖用于未来模型能力与当前向量适配；直接声明 `org.commonmark:commonmark` 与 `org.commonmark:commonmark-ext-gfm-tables:0.22.0`（与 Spring AI 2.0.1 传递 core 对齐），保留已有 markdown reader 依赖但不用其 reader，因保留原文及源位置；直接声明 `com.knuddels:jtokkit:1.1.0`（原 Spring AI 2.0.1 传递依赖版本，但 Spring AI BOM 不直接管理，显式固定用于本地 CL100K_BASE 预算分词）。当前已实现 TXT 和 Markdown 两种生产文档解析器（`TextKnowledgeDocumentParser`、`MarkdownKnowledgeDocumentParser` 与受控 `Utf8TextDecoder`），以及生产切分策略 `TokenBudgetKnowledgeChunker`（支持 FLAT 与 PARENT_CHILD 模式）。`KnowledgeDocumentParser` 接口保持不变。`PreparedSource` 保存同一份已验证原始字节，不执行 UTF-8 解码；由生产文本解析器通过 `Utf8TextDecoder` 负责严格 UTF-8 校验与换行规整。
 
-RAG 默认关闭。开启时需有实际注册的解析与 FLAT 分块策略、OpenAI Embedding 及 Qdrant 适配器，否则启动失败；配置变量本身不能启用真实 txt/md 处理。策略替身测试可覆盖固定编排、本地持久化与向量边界，但不等价于真实解析、切分或外部调用验收。`build(actor,document)` 默认选 FLAT，内部第三参数可选 PARENT_CHILD，不新增模式配置项。数据库批次以整组为单位，`RAG_BATCH_SIZE` 不拆组；向量仅写 RETRIEVAL 且使用精确批次上限，`RAG_MAX_NUM_CHUNKS` 统计所有角色。
+RAG 默认关闭。新增 `KnowledgeParserConfiguration` 与 `KnowledgeChunkerConfiguration` 在 RAG 开启时分别注册生产解析器与切分策略；`KnowledgeRagConfiguration` 分离管理，仍检查 FLAT 分块策略、OpenAI Embedding 及 Qdrant 适配器，缺少外部后端依赖时仍拒绝启动。解析器构造参数复用 `KnowledgeRagProperties.maxSourceSize`（绑定 `APP_FILE_MAX_SIZE`）。切分策略消费 `ChunkingOptions`，按 CL100K_BASE 预算、局部 UTF-16 区间、同路径合并与结构块隔离执行切分。解析器与切分器单测验证真实行为（不访问网络），`KnowledgeChunkingBuildIntegrationTest` 在隔离 H2 下配合文件/向量替身验证本地完整构建链路与发布流转，解析与切分实现不代表真实外部服务已验收或生产端到端完成。`build(actor,document)` 默认选 FLAT，内部第三参数可选 PARENT_CHILD，不新增模式配置项。数据库批次以整组为单位，`RAG_BATCH_SIZE` 不拆组；向量仅写 RETRIEVAL 且使用精确批次上限，`RAG_MAX_NUM_CHUNKS` 统计所有角色。
 
 当前没有真实登录、退出、角色权限、账户启停、客户端直传、跨系统自动补偿、完整并发治理、PDF/DOCX/OCR 解析、异步任务、检索或问答。知识库基础持久化和父子字段存储、固定构建编排及版本发布已实现；未来能力仍按明确需求加入。
 

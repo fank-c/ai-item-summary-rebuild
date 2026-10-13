@@ -1,6 +1,6 @@
 # 知识库表结构
 
-知识库基础使用 `knowledge_base`、`knowledge_document`、`knowledge_document_revision`、`knowledge_chunk` 四张表，支持内部基础服务、chunk 父子字段及固定 RAG 构建编排/版本生命周期。当前没有生产 parser 或 chunker，因此尚不能实际完成 txt/md 入库；也没有知识库 HTTP、权限、检索或问答。
+知识库基础使用 `knowledge_base`、`knowledge_document`、`knowledge_document_revision`、`knowledge_chunk` 四张表，支持内部基础服务、chunk 父子字段及固定 RAG 构建编排/版本生命周期。当前已提供 TXT/Markdown 生产文档解析器与 TokenBudgetKnowledgeChunker（FLAT 与 PARENT_CHILD 模式）；解析与切分实现不代表真实外部服务已验收或生产端到端完成；没有知识库 HTTP、权限、检索或问答。
 
 返回 [文档导航](../../README.md)。内部调用合同见 [知识库模块](../../modules/knowledge.md)，初始化步骤见 [运行指南](../../guides/getting-started.md)，验证方式见 [测试说明](../../guides/testing.md)。
 
@@ -18,10 +18,10 @@ knowledge_base
 
 - 知识库只保存自身信息，不记录用户归属，允许多库同名。
 - 知识文档表示文件与知识库的登记关系，同一知识库不能重复登记同一文件。
-- 一个文档可以有多个版本，一个版本可以有多个片段。片段表可保存 CONTEXT 与 RETRIEVAL 两种角色；检索块可关联同版本的上下文父块，不表示完整章节树。固定构建入口接受策略提供的分组结果，但当前没有生产解析或分块策略。
+- 一个文档可以有多个版本，一个版本可以有多个片段。片段表可保存 CONTEXT 与 RETRIEVAL 两种角色；检索块可关联同版本的上下文父块，不表示完整章节树。固定构建入口接受策略提供的分组结果，当前已提供 TXT/Markdown 解析策略与 TokenBudgetKnowledgeChunker（FLAT 与 PARENT_CHILD 模式）。
 - 片段 ID 是 32 位业务 UUID。现有 Spring AI 向量适配器使用同一个 UUID 的标准连字符表示，并让 `metadata.knowledge_chunk_id` 保留业务原值；这不表示当前外部 Qdrant 已连接或验收。
 
-表间采用逻辑关联，没有物理外键或级联删除。应用服务检查知识库、文档和版本是否存在，并通过文件模块检查源文件归属。固定构建骨架的发布事务确认目标版本归属、building 状态、全部角色实际总数、RETRIEVAL 数及活动快照，再原子更新 ready、活动指针和旧版本 superseded。向量操作不属于该数据库事务；当前没有检索实现或生产解析/分块策略。
+表间采用逻辑关联，没有物理外键或级联删除。应用服务检查知识库、文档和版本是否存在，并通过文件模块检查源文件归属。固定构建骨架的发布事务确认目标版本归属、building 状态、全部角色实际总数、RETRIEVAL 数及活动快照，再原子更新 ready、活动指针和旧版本 superseded。向量操作不属于该数据库事务；当前没有检索实现。
 
 ## 字段定义
 
@@ -69,7 +69,7 @@ knowledge_base
 | `completed_at`、`published_at` | DATETIME(6) | 是 | 完成和发布时间 |
 | `cleaned_at` | DATETIME(6) | 是 | 本阶段为向量清理完成时间；失败版本及数据库片段保留 |
 
-基础版本创建只分配 building 记录。构建骨架另在文档锁下检查 building 互斥，并编排原字节准备、已注册的解析/分块策略、片段保存与检索向量写入；当前缺少生产 parser/chunker，不能据此视为真实内容构建已可用。创建时完成、发布、清理时间和失败信息为空；成功发布写 source_sha256、completed_at、published_at，ready 与文档 active_revision_id 共同表示活动版本，旧活动版本变为 superseded。失败写固定阶段、编码、摘要和结束时间，但不填 published_at。
+基础版本创建只分配 building 记录。构建骨架另在文档锁下检查 building 互斥，并编排原字节准备、已注册的解析/分块策略、片段保存与检索向量写入；解析与切分实现不代表真实外部服务已验收或生产端到端完成。创建时完成、发布、清理时间和失败信息为空；成功发布写 source_sha256、completed_at、published_at，ready 与文档 active_revision_id 共同表示活动版本，旧活动版本变为 superseded。失败写固定阶段、编码、摘要和结束时间，但不填 published_at。
 
 版本表保存整体结果、失败摘要、源文件摘要、数量和时间，不保存解析策略、切片策略及参数、规范化策略、质量状态、向量路由或阶段进度 JSON。片段表也不保存切片策略，因此无法从历史版本还原当时的处理参数。后续更换向量模型或集合时，应另行判断兼容性和索引重建需求，不能假定不同模型的向量可混用。
 
@@ -93,13 +93,13 @@ knowledge_base
 
 角色与关系组合固定为：CONTEXT 无父块；RETRIEVAL 可独立存在，或指向同版本的无父 CONTEXT 块。只支持两层上下文关系，禁止自引用、缺失父块、跨版本引用及以 RETRIEVAL 为父块。不存在独立的更新父子关系接口，重新切分应生成新版本；沿用逻辑关联、不加物理外键或 SQL CHECK，由服务校验全部关系后插入。
 
-父块和检索块分别保存正文，允许内容重叠，不以拼接子块代替父块正文。`chunk_role` 表示用途，不是 TEXT/TABLE/CODE 内容类别。固定构建骨架按组保存策略输出，并仅将已保存 RETRIEVAL 交给向量 port；生产父子切分策略尚未实现。现有 Spring AI 向量适配器可写入 RETRIEVAL 并按 revision_id 过滤删除，但外部 Embedding/Qdrant 调用尚未验收；父块检索和一般检索流程未实现。
+父块和检索块分别保存正文，允许内容重叠，不以拼接子块代替父块正文。`chunk_role` 表示用途，不是 TEXT/TABLE/CODE 内容类别。在 PARENT_CHILD 模式下，父块作为 CONTEXT 仅持久化到 MySQL，不进入向量索引；检索子块作为 RETRIEVAL 关联父块并推送给向量索引。若短内容单一 child 覆盖整段 parent，则不额外存一份相同父正文（直接为无父 RETRIEVAL）。现有 Spring AI 向量适配器可写入 RETRIEVAL 并按 revision_id 过滤删除，但外部 Embedding/Qdrant 调用尚未验收；父块检索和一般检索流程未实现。
 
 标题按原顺序保存，层级为正、标题非空白。标题路径表示来源章节，与上下文父子关系独立；父子可具有相同路径。JSON NULL 和空数组分别还原，不把 JSON 数组保存为字符串；MySQL 与 H2 的绑定方式见[知识库模块](../../modules/knowledge.md#固定构建流程与合同)。
 
 偏移必须同时为空或满足 `0 <= start_offset < end_offset`；页码必须同时为空或满足 `1 <= page_start <= page_end`。这些规则由领域及内部服务校验，正式 schema 不增加 SQL CHECK 约束。父子偏移使用同一处理后全文参照，不改成相对父块的位置，重叠检索块的区间可以重叠；无法可靠映射到连续区间时为空。全文偏移不受当前片段正文长度限制；Token 数是本行正文的计数，不累计子块，也不保证等于未来 Embedding 模型的实际 Token 数。
 
-构建骨架不会自行生成 heading_path、token_count、偏移或页码；这些数据由未来 parser/chunker 在有可靠来源时提供，未知时保持为空。基础片段入口仍保存调用方提供的合法值。未知位置不从父章节复制范围后宣称是子片段的精确范围。向量 metadata 不会自动生成可靠原文偏移。当前偏移不表示原文件字节位置或 PDF 坐标，四表也未保存用于定位的完整处理后文本、OCR 区域或 Word 段落位置。需要原文高亮时，应先明确参考文本保存方式和解析器的位置输出。
+构建骨架不会自行生成 heading_path、token_count、偏移或页码；这些数据由 parser/chunker 在有可靠来源时提供，未知时保持为空。TokenBudget 切分器中，跨块或包含合成分隔符的切片不伪造全文偏移（置为 null）；仅单块原样等长来源可推导子 offset，完整块可沿用原范围；页码仅整块或单页可靠，部分多页块页码为 null；token_count 按 CL100K_BASE 统计本行正文。基础片段入口仍保存调用方提供的合法值。未知位置不从父章节复制范围后宣称是子片段的精确范围。向量 metadata 不会自动生成可靠原文偏移。当前偏移不表示原文件字节位置或 PDF 坐标，四表也未保存用于定位的完整处理后文本、OCR 区域或 Word 段落位置。需要原文高亮时，应先明确参考文本保存方式和解析器的位置输出。
 
 ## 索引与写入约束
 
@@ -126,4 +126,4 @@ knowledge_base
 
 隔离 H2 Mapper 测试覆盖字段、两种片段角色与父引用、按版本和序号查找、唯一索引、JSON 数组顺序、可空位置和 UTC 微秒。内部服务测试覆盖关联与文件归属、版本竞争，以及普通块兼容、同批和既存父块引用解析、非法关系拒绝、片段排序、两种角色总数和失败回滚。固定编排测试使用 parser/chunker 替身，另有生命周期 H2 测试；这些均不是生产 MySQL 或真实内容处理验收。测试源码入口见[知识库模块](../../modules/knowledge.md#表结构配置与验证入口)。
 
-普通测试使用隔离 H2、策略替身和 VectorStore 替身，覆盖固定构建编排与发布/失败合同；不能替代生产 parser/chunker、正式 MySQL、OpenAI 或 Qdrant 验收，也不能证明检索或位置生成可用。既有 `mysql-it` profile 只覆盖用户模块。
+普通测试使用隔离 H2、策略替身和 VectorStore 替身，覆盖固定构建编排与发布/失败合同；不能替代正式 MySQL、OpenAI 或 Qdrant 验收，也不能证明检索可用；TXT/MD 解析行为与位置生成由独立解析器测试验证，切分策略行为由 TokenBudgetKnowledgeChunkerTest 单元测试验证，完整构建链路与发布流转由 KnowledgeChunkingBuildIntegrationTest（隔离 H2 + 真实本地 parser/chunker + 替身）验证。既有 `mysql-it` profile 只覆盖用户模块。

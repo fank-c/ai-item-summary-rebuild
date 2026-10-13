@@ -1,14 +1,14 @@
 # 知识库模块
 
-当前提供知识库四表持久化、内部基础服务，以及固定 RAG 构建骨架。骨架定义了解析/分块合同、原字节读取、分组片段保存、向量适配和版本生命周期，但**没有生产文档解析器或分块器**。因此目前不能通过配置完成真实 txt/md 入库。
+当前提供知识库四表持久化、内部基础服务、TXT 与 Markdown 生产文档解析器、TokenBudgetKnowledgeChunker（支持 FLAT 与 PARENT_CHILD 模式），以及固定 RAG 构建编排与版本生命周期。默认仍保持 RAG 关闭，缺少 OpenAI Embedding 或 Qdrant 等外部后端依赖时显式开启 RAG 仍拒绝启动；解析与切分实现不代表真实外部服务已验收或生产端到端完成。
 
-返回[文档导航](../README.md)。表字段见[知识库表结构](../reference/database/knowledge.md)，环境变量及原有默认值见[配置说明](../reference/configuration.md#rag-构建配置)，运行与范围见[运行指南](../guides/getting-started.md#6-rag-构建骨架状态)，测试边界见[测试说明](../guides/testing.md)。
+返回[文档导航](../README.md)。表字段见[知识库表结构](../reference/database/knowledge.md)，环境变量及原有默认值见[配置说明](../reference/configuration.md#rag-构建配置)，运行与范围见[运行指南](../guides/getting-started.md#6-rag-构建状态与依赖边界)，测试边界见[测试说明](../guides/testing.md)。
 
 ## 学习目标与范围
 
 本模块用于学习内部知识库服务、chunk 父子数据合同、Spring 事务下的版本生命周期，以及应用如何通过 parser/chunker/vector ports 组织可替换处理步骤。Spring AI 向量适配器把已保存的 RETRIEVAL 片段转换为向量文档。
 
-以下部分尚未实现：txt/md 或其他格式的生产 parser、FLAT/PARENT_CHILD 生产 chunker、UTF-8 文本解析、真实端到端入库验收、检索和问答。`FileFormat` 中列出 TXT/MD/PDF/DOCX 仅表示可路由的格式枚举，不代表相应解析器存在。当前无 `TextReader`、`MarkdownDocumentReader` 或 `TokenTextSplitter` 生产流程。
+当前已实现 TXT 和 Markdown 两种生产解析器（`TextKnowledgeDocumentParser` 与 `MarkdownKnowledgeDocumentParser`，委托受控 `Utf8TextDecoder` 负责严格 UTF-8 校验与换行规整），以及生产分块策略 `TokenBudgetKnowledgeChunker`（支持 FLAT 与 PARENT_CHILD 模式）。PDF/DOCX 生产解析器、真实端到端外部入库验收、检索和问答不在本阶段范围。`FileFormat` 中列出 TXT/MD/PDF/DOCX 格式枚举，当前已支持 TXT 与 MD 格式路由。工程直接声明 `org.commonmark:commonmark` 与 `org.commonmark:commonmark-ext-gfm-tables:0.22.0`（与 Spring AI 2.0.1 传递 core 对齐），保留已有 markdown reader 依赖但不用其 reader，因需保留原文及源位置，避免 renderer 回写破坏；直接声明 `com.knuddels:jtokkit:1.1.0`（原 Spring AI 2.0.1 传递依赖版本，但 Spring AI BOM 不直接管理，显式固定用于本地 CL100K_BASE 预算分词）。
 
 没有知识库 HTTP、权限管理、删除、异步任务、PDF/DOCX/OCR 解析、检索、聊天或重排序。文件归属检查不等于知识库授权。MySQL 保存权威版本状态；向量索引是外部派生数据，两者没有共同事务。
 
@@ -23,9 +23,9 @@
 | `KnowledgeIndexBuildService` | `build(actorUserId,documentId)` 默认 FLAT；`build(actorUserId,documentId,mode)` 显式选择已注册的 FLAT 或 PARENT_CHILD 分块策略 |
 | `KnowledgeBuildLifecycleService` | begin/publish/fail/清理记录；短事务管理版本状态，不调用 parser、chunker 或向量后端 |
 | `KnowledgeChunkGroupWriter` | 构建侧组合同适配器；为组分配序号、角色和父序号，转换为既有命令并一次调用 `KnowledgeChunkService.saveBatch` |
-| `KnowledgeDocumentParser` / `KnowledgeChunker` / `KnowledgeVectorIndex` | 按 parse/chunk/vector 能力组织的应用层扩展合同；当前无生产 parser/chunker |
+| `KnowledgeDocumentParser` / `KnowledgeChunker` / `KnowledgeVectorIndex` | 按 parse/chunk/vector 能力组织的应用层扩展合同；解析器已提供 TXT 和 Markdown 生产实现，切分策略由 TokenBudgetKnowledgeChunker 提供 FLAT 与 PARENT_CHILD 两种生产模式 |
 
-构建入口和 `KnowledgeChunkGroupWriter` 只在 RAG 条件配置启用时装配。当前生产配置没有 parser/chunker Bean，因此 RAG 保持关闭；显式开启时缺少任一必要策略会拒绝启动，而不是装配空实现。即使补齐模型和 Qdrant 配置，也不能单独启用真实 txt/md 入库。
+构建入口和 `KnowledgeChunkGroupWriter` 只在 RAG 条件配置启用时装配。新增 `KnowledgeParserConfiguration` 与 `KnowledgeChunkerConfiguration` 在 `APP_KNOWLEDGE_RAG_ENABLED=true` 时分别注册生产解析器与切分策略，与现有 `KnowledgeRagConfiguration` 分离；`KnowledgeRagConfiguration` 继续在缺少 OpenAI Embedding 或 Qdrant 时拒绝启动，而不是装配空实现。默认仍保持 RAG 关闭，缺少外部依赖时仍拒绝启动；解析与切分实现不代表真实外部服务已验收或生产端到端完成。
 
 通过 Spring 注入的代理使用构建服务，不能自行 `new` 事务服务或在外层事务中调用 `build`。构建方法使用 `Propagation.NEVER`；构建生命周期与片段写入各自在短事务中执行。组 writer 本身没有事务注解，通过注入的 Spring `KnowledgeChunkService` 代理调用一次 `saveBatch`，由基础服务事务边界保障整批原子写入。构建结果与异常均为内部 Java 合同，当前没有公开 HTTP 错误映射。
 
@@ -43,9 +43,9 @@
 
 构建先校验显式 actor ID、文档和可处理源文件，再根据名称末段扩展名选择 `FileFormat`，并在创建版本前查找 parser 与 chunker。模式不由文件格式推断：两参数调用默认为 `ChunkingMode.FLAT`，第三参数可指定 `PARENT_CHILD`；缺少指定策略会失败，不自动降级。FLAT 输出中不允许有上下文父块，PARENT_CHILD 可为短内容返回无父组。
 
-`application.knowledge.indexing.source` 中的 `KnowledgeSourceReader` 将源流读至受控内存，校验记录大小、实际大小上限和原字节 SHA-256，生成可重复打开的 `PreparedSource`。资源流由调用者通过 try-with-resources 关闭。此步骤只准备和校验字节，不做 UTF-8 解码；未来文本 parser 必须自己执行严格 UTF-8 校验。当前没有生产 parser。
+`application.knowledge.indexing.source` 中的 `KnowledgeSourceReader` 将源流读至受控内存，校验记录大小、实际大小上限和原字节 SHA-256，生成可重复打开的 `PreparedSource`。资源流由调用者通过 try-with-resources 关闭。此步骤只准备和校验字节，不做 UTF-8 解码；由生产文本解析器通过 `Utf8TextDecoder` 负责严格 UTF-8 校验与换行符规整。当前已实现 TXT 与 Markdown 两种生产解析器以及 TokenBudgetKnowledgeChunker（FLAT 与 PARENT_CHILD 模式）。
 
-`application.knowledge.indexing.parse` 中的 `ParsedDocument` 与有序 `ContentBlock` 表达 parser 的结构化输出；内容类别、标题路径、边界和可靠来源位置是数据合同，不是已实现的格式解析算法。`application.knowledge.indexing.chunk` 中的 `ChunkDraft`、`ChunkGroupDraft` 与 `ChunkingOptions` 同样只是分块策略输入/输出合同。`SourceLocation` 继续位于 `domain.knowledge.value`，位置规则由 `KnowledgeRules.requireLocation` 校验。标题、Token 数、偏移和页码未知时保持 null，不伪造来源位置或估算精确 Token 数。
+`application.knowledge.indexing.parse` 中的 `ParsedDocument` 与有序 `ContentBlock` 表达 parser 的结构化输出；内容类别、标题路径、边界和可靠来源位置是格式无关的数据合同；具体 TXT/MD 算法留在基础设施层。`application.knowledge.indexing.chunk` 中的 `ChunkDraft`、`ChunkGroupDraft` 与 `ChunkingOptions` 同样只是分块策略输入/输出合同。`SourceLocation` 继续位于 `domain.knowledge.value`，位置规则由 `KnowledgeRules.requireLocation` 校验。标题、Token 数、偏移和页码未知时保持 null，不伪造来源位置或估算精确 Token 数。
 
 ### 组式保存与向量写入
 
@@ -59,7 +59,7 @@
 
 基础 `KnowledgeChunkService.saveBatch` 只接受 building 版本，使用 READ_COMMITTED 锁住目标版本，在单事务内校验关系、插入和更新实际片段总数。数据库异常回滚整批；同版本追加串行执行。基础批次输入以版本内全局序号引用父块。构建组只由 `KnowledgeChunkGroupWriter` 转换：为整批组分配连续序号、角色及父序号，映射到现有 `SaveKnowledgeChunkCommand`，通过一次对 Spring 代理 `saveBatch` 的调用持久化；基础服务没有 `saveGroups`，不导入 indexing 合同。
 
-CONTEXT 必须无父；RETRIEVAL 可独立存在或引用同版本的无父 CONTEXT。父块和子块共同占用全局序号，父子正文分别保存；数据库 `chunk_count` 统计所有角色，不等于向量数量。只允许两层上下文关系，不表示完整章节树。具体切分算法和父块生成策略尚未实现。
+CONTEXT 必须无父；RETRIEVAL 可独立存在或引用同版本的无父 CONTEXT。父块和子块共同占用全局序号，父子正文分别保存；数据库 `chunk_count` 统计所有角色，不等于向量数量。只允许两层上下文关系，不表示完整章节树。在 PARENT_CHILD 模式下，父块作为 CONTEXT 保存入库但不写向量，子块作为 RETRIEVAL 关联父块并写入向量索引；若短内容单一 child 块已覆盖整段 parent，则不额外存一份相同父正文（context = null，直接为无父检索块）。
 
 ### 生命周期与失败边界
 
@@ -68,6 +68,108 @@ CONTEXT 必须无父；RETRIEVAL 可独立存在或引用同版本的无父 CONT
 构建对 parser、chunker、向量索引的调用均在数据库事务外。普通失败在成功记录 failed 后尝试按当前版本清理向量，删除成功后才写 `cleaned_at`；删除失败保留原失败阶段/编码并记录固定清理摘要。删除已成功但清理完成写库失败时，只记录固定告警并返回清理未确认，不追加虚假的向量删除失败摘要。失败事实也无法落库时保留向量待核对；发布事务失败同样保留派生向量，不盲目删除或声称提交结果一定已回滚。发布成功后的旧向量删除或清理记录失败不会回滚新活动版本。
 
 没有 MySQL 与 Qdrant 共同事务，也没有完整补偿、幂等治理、building 中断恢复或全面并发协调。当前没有检索实现；未来检索必须先从 MySQL 读取活动版本，再用活动 `revision_id` 过滤向量。ready 状态或向量存在本身不能证明其属于当前可检索版本。
+
+## 文档解析规则与安全预算
+
+### 严格解码与受控预处理（`Utf8TextDecoder`）
+
+TXT 与 Markdown 解析器均委托 package-private `Utf8TextDecoder` 执行统一的受控字节解码：
+- **严格 UTF-8 校验**：使用 `CharsetDecoder`（`REPORT` 模式），拒绝非法或截断的 UTF-8，并拒绝 NUL 字符。不自动猜测或转换 GBK/UTF-16；不同编码可能共享合法字节，因此不声称能识别所有源编码。失败异常使用固定安全文案，不回显源正文或文件名。
+- **BOM 与换行符统一**：若文本开头包含至多一个 UTF-8 BOM（`\uFEFF`）则予以剥离；正文所有换行符（CRLF、CR）统一规范化为 LF（`\n`），正文其余字符原样保留。
+- **内存流管理与预算检查**：通过 `InputStreamReader` 增量解码已准备的内存流，避免再次复制整份原字节；使用 `try-with-resources` 关闭流。校验源格式匹配及元数据/读取字节预算，源大小不得超过 `maxSourceSize`。
+
+### TXT 解析规则（`TextKnowledgeDocumentParser`）
+
+- **自然段切分**：由包含空白字符（涵盖普通空白与 `Character.isSpaceChar` 如 NBSP）的连续空行作为自然段落分隔符。
+- **正文保留**：段内换行与段内空格缩进原样保留，不执行 trim；段外用于分隔的换行不计入内容块。
+- **内容块规格**：全部内容块类别均为 `ContentBlockType.TEXT`，`headingPath = null`，页码保持为 null，`boundaryBefore = false`，序号从 0 连续递增。
+- **来源位置**：`SourceLocation` 偏移为规整后全文（统一 LF）的 UTF-16 substring 半开区间 `[start_offset, end_offset)`。
+- **失败边界**：空白文档（含纯空白、纯 NBSP 或 0 字节）明确解析失败抛出异常。
+
+### Markdown 解析规则（`MarkdownKnowledgeDocumentParser`）
+
+- **引擎与顶层块提取**：基于 CommonMark 规范与 GFM 表格扩展（`org.commonmark:commonmark` 与 `org.commonmark:commonmark-ext-gfm-tables:0.22.0`），只识别顶层块（top-level blocks），保留原 text。
+- **原文保留与位置映射**：TXT/MD 当前输出 source 均为规整后全文的可靠 UTF-16 substring 半开区间 `[start_offset, end_offset)`。Markdown 通过 node spans 换算为行起始的 UTF-16 字符偏移（非字节偏移），使用 block 级 spans 截取原文 substring，不使用 renderer 回写生成（避免丢失位置和破坏原文）；行内 AST 采用轻量 parser 留 literal TEXT，避免生成大量 inline AST，行内语法留在正文。
+- **各类型块处理规则**：
+  - `HEADING`：包含 `#` 或 Setext 形式的完整原文；headingPath 提取标题名去掉结构符号（如 `#`、下划线），但保留 inline 语法；heading 每次均作为硬边界（`boundaryBefore = true`）。CommonMark 允许的空标题保留为 `TEXT`，移除同级及更深标题路径，不构造空白的领域标题。
+  - 水平线（THEMATIC_BREAK）：不输出为单独 ContentBlock，但作为其后紧邻下一 block 的硬边界（`boundaryBefore = true`）。
+  - `CODE`：包含围栏（``` / ~~~）或缩进，保留完整源码。
+  - `TABLE`：保留完整表格源码结构。
+  - 列表与引用（LIST / BLOCK_QUOTE）：整个列表或块引用作为单个 `TEXT` 块输出，不递归重复输出嵌套段落，不用嵌套标题污染外层 headingPath。
+  - HTML、图片、公式等均保留原文，不执行远程资源下载或 OCR。
+  - Reference 定义（Link Reference Definition）保留为 `TEXT`。
+  - 容错与失败边界：不完整/畸形 markdown 按 CommonMark 规范容错解释；全空白或仅包含水平线时解析失败；node 无 spans（`spans.isEmpty()` 或行索引越界）时明确解析失败抛出异常，不估算位置（扩展 port 其他格式时位置允许为 null）；未知页码为 null。
+
+### 固定安全预算与条件装配
+
+- **固定安全预算与防御边界**（硬编码常量，不新增配置变量）：
+  - 两解析器最大输出内容块数：`MAX_BLOCKS = 100,000`（`Utf8TextDecoder.MAX_BLOCKS`）；
+  - Markdown 最大解析行数：1,000,000 行；
+  - Markdown 容器嵌套保护阈值：128；
+  - 固定 guards（100k blocks、1M lines、嵌套深度 128）为硬编码解析防御限制，不是安全保证（不作为恶意 DoS 防护承诺）；超限明确拒绝，不截断内容。以上预算独立于 `RAG_MAX_NUM_CHUNKS`，不保证任意堆大小下都能解析所有合法输入，增大源大小前应评估 AST 与正文内存占用。
+- **条件装配与配置复用**：
+  - 新增 `KnowledgeParserConfiguration` 位于 `infrastructure.knowledge.indexing.config`，仅在 `app.knowledge.rag.enabled=true` 时装配 TXT 和 Markdown 两种生产解析器 Bean。
+  - 构造函数 `constructor(long maxSourceSize)` 复用现有 `KnowledgeRagProperties.maxSourceSize`（绑定 `APP_FILE_MAX_SIZE`），无新增配置变量、defaults、schema 或 API。
+
+## Token 预算切分规则与边界（`TokenBudgetKnowledgeChunker`）
+
+生产切分策略实现为 `TokenBudgetKnowledgeChunker`，位于 `infrastructure.knowledge.indexing.chunk`，支持 `FLAT` 与 `PARENT_CHILD` 两种模式。由 `KnowledgeChunkerConfiguration` 在 `app.knowledge.rag.enabled=true` 时注册为 Spring Bean。
+
+### 内核与 Token 预算
+
+- **共用内核**：FLAT 与 PARENT_CHILD 两种模式共用底层的原文区间切分内核（`TokenRangeSplitter` 与 `SourceMappedText`），不依赖源文件格式。切分策略实例在构造时不绑定具体运行参数，而是在执行 `chunk(document, options)` 时消费传入的 `ChunkingOptions`。
+- **本地 CL100K_BASE 计数**：Token 预算通过直接声明的 `com.knuddels:jtokkit:1.1.0`（`JTokkitTokenBudget`）基于 `CL100K_BASE` 编码进行本地精确计算（`countTokensOrdinary` 与 `encodeOrdinary`），不调用任何网络或模型服务端接口；文本中的特殊 Token 字面量（如 `<|endoftext|>`）按普通文本字面处理；不声称与任意模型提供商的服务端计数严格一致。
+- **工作窗口与 BPE 适配**：切分前瞻窗口保守限定为预算的 16 倍 UTF-16 长度（下限 64），避免重复全篇编码；前缀截断后重新由 tokenizer 校验，若截断影响 BPE 编码则逐步收缩完整码点，确保最终片段 Token 数严格不超过预算。
+
+### 局部 UTF-16 坐标与运行范围隔离
+
+- **逻辑运行范围（Logical Run）**：文档输入块按结构与边界划分为隔离的连续范围：
+  - 遇到显式硬边界（`boundaryBefore = true`）时强制隔离；
+  - 遇到 `headingPath` 路径变化时强制隔离；
+  - 遇到 `CODE` 或 `TABLE` 结构块时强制独立成段隔离。
+- **短块合并**：同一逻辑运行范围内、相同 headingPath 的普通文本块使用固定 `\n\n`（`keepSeparator = false` 时使用两个空格 `"  "`）连接合并；跨运行范围不合并。
+- **位置映射与全文偏移推导**：
+  - 块间插入的合并分隔符由于在原文中不存在，跨块或包含合成分隔符的切片不伪造全文偏移，`SourceLocation` 的 `startOffset` 与 `endOffset` 保守置为 `null`；
+  - 仅当切片完全来自单个原样等长的输入块时，按局部 UTF-16 相对坐标精确推导全文子偏移；若完整覆盖输入块，则直接沿用原来源范围；
+  - 页码仅在整块覆盖或单页来源时可靠（`pageStart == pageEnd` 或完整覆盖）；覆盖部分多页块时页码保守置为 `null`；
+  - 标题路径的 `null`（如纯文本段落）与空列表 `[]`（如无标题 Markdown 块）保持语义区别，不混同。
+
+### 换行与分隔符语义（`keepSeparator`）
+
+- `keepSeparator = true` 时原样保留换行符。
+- `keepSeparator = false` 时，仅对普通文本的 CR（`\r`）与 LF（`\n`）一对一等长替换为空格（`' '`）；结构块（`CODE` 与 `TABLE`）始终保留原始换行排版。
+- 无论开关状态，切分过程均**不删除标点符号、不执行 trim**。
+
+### 候选边界判定与回退层级
+
+在 Token 预算上限（`cap`）约束内，切分器优先寻找语义断句点；为避免过碎切分，若候选断点距离片段起点不足 `minChunkSizeChars`（短块软阈值）则继续向后寻找：
+1. **段落边界**：连续双换行 `\n\n`（结构块不套用）；
+2. **句子边界**：强句末标点（`。？！?!` 以及避开数字小数点和域名/缩写的 `.`）；
+3. **次级边界**：单个换行 `\n` 或 `punctuationMarks` 中包含的其他标点；
+4. **空白边界**：任意空白字符；
+5. **预算安全截断**：若无上述合适边界，直接截断至 Token 预算允许的前缀（`cap`），并确保末尾不越过 BPE 编码预算。
+
+### Unicode、短尾保护与超限拒绝
+
+- **Unicode 保护**：切分基于 UTF-16 局部坐标，不保证 Unicode 字素簇完整（如复杂多码点修饰 emoji），但**绝不拆分代理对（surrogate pair）**；输入包含不完整或孤立的高低代理项时，在进入切分前抛出异常明确拒绝。
+- **短尾不丢**：切分绝不丢弃尾部非空短文本；纯空白窗口可能不产生切片，但所有非空内容必须被切片完全覆盖。若 Token 预算过小无法容纳单个完整 Unicode 字符，明确抛出异常。
+- **总切片数保护**：单篇文档生成的片段总数（包含 CONTEXT 与 RETRIEVAL 所有角色）若超出 `maxNumChunks`，明确抛出异常终止构建。
+
+### 两种模式与父子关系
+
+- **FLAT 模式**：直接按 `chunkSize` 切分，产出的所有 `ChunkGroupDraft` 中 `context = null`，只包含一个或多个 `RETRIEVAL` 子块；支持 `chunkOverlap` 重叠目标尺寸。
+- **PARENT_CHILD 模式**：
+  - 父块切分：按 `parentChunkSize` 将运行范围切分为互不重叠的父块（`overlap = 0`）；
+  - 子块切分：在各父块范围内按 `chunkSize` 切分子检索块，支持 `chunkOverlap` 重叠目标尺寸；
+  - **正推进重叠**：`chunkOverlap` 目标满足 `0 <= chunkOverlap < chunkSize`；重叠采用有界候选二分搜索确定重叠起点，每个候选通过实际 Token 计数校验（不保证最大重叠，可能缩小或取消），且下一块必须向前推进新内容（`covered` 终点严格递增），防止循环停滞；在硬边界、运行范围边界或父块边界处重置重叠；
+  - **单一子块优化**：若一个父块范围内仅产生一个检索子块且其范围与父块完全一致，则不额外保存一份相同父块正文（`context = null`，直接作为无父检索块）；
+  - **存储与索引分工**：父块（`CONTEXT`）只持久化到 MySQL，不进入向量索引；只有检索子块（`RETRIEVAL`）被提交给向量索引进行批量向量化。
+
+### CODE 与 TABLE 结构块降级
+
+- 结构块单独隔离为一个运行范围，标记 `lineOnly = true`；
+- 始终保留换行排版，不进行普通段落/句子断句；过长时仅按行（`\n`）或安全长度退化切分；
+- 不具有结构化表格行/表头语义或代码语法 AST 解析能力；切分逻辑无需修改文档 AST 或数据库 schema。
 
 ## 字段、位置与时间
 
@@ -79,10 +181,13 @@ CONTEXT 必须无父；RETRIEVAL 可独立存在或引用同版本的无父 CONT
 
 四表和 chunk 字段以[数据库参考](../reference/database/knowledge.md)及 `deploy/mysql/schema.sql` 为准；本次构建骨架不修改 schema。生产脚本手动执行，不升级已有旧表。缺少 `parent_chunk_id`、`chunk_role` 或其索引时，需要另行手动迁移；保留旧片段身份与序号，并将旧平铺数据归为无父 RETRIEVAL。
 
-RAG 配置变量和现有默认值见[配置说明](../reference/configuration.md#rag-构建配置)。没有新增模式变量；模式由内部 `build` 第三个参数选择。普通测试关闭 RAG 外部后端，使用 H2 与策略/向量替身。
+RAG 配置变量和现有默认值见[配置说明](../reference/configuration.md#rag-构建配置)。没有新增模式变量；模式由内部 `build` 第三个参数选择。普通测试关闭 RAG 外部后端，真实调用 TXT/MD 解析器与切分器；构建编排既保留原有分块/向量替身测试，也通过 `KnowledgeChunkingBuildIntegrationTest` 结合真实本地 parser/chunker 验证 H2 持久化与发布流转（向量仍为替身）。
 
 | 学习内容 | 代码/测试 |
 | --- | --- |
+| 生产切分策略与本地预算 | [infrastructure `indexing/chunk`](../../src/main/java/com/item/aisummary/infrastructure/knowledge/indexing/chunk/)、[KnowledgeChunkerConfiguration](../../src/main/java/com/item/aisummary/infrastructure/knowledge/indexing/config/KnowledgeChunkerConfiguration.java)；[TokenBudgetKnowledgeChunkerTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/indexing/chunk/TokenBudgetKnowledgeChunkerTest.java)、[ChunkingOptionsTest](../../src/test/java/com/item/aisummary/application/knowledge/indexing/chunk/ChunkingOptionsTest.java)、[KnowledgeChunkerConfigurationTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/indexing/config/KnowledgeChunkerConfigurationTest.java) |
+| 本地分块构建集成 | [KnowledgeChunkingBuildIntegrationTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/indexing/chunk/KnowledgeChunkingBuildIntegrationTest.java) |
+| 生产文档解析器与解码 | [infrastructure `indexing/parse`](../../src/main/java/com/item/aisummary/infrastructure/knowledge/indexing/parse/)、[KnowledgeParserConfiguration](../../src/main/java/com/item/aisummary/infrastructure/knowledge/indexing/config/KnowledgeParserConfiguration.java)；[TextKnowledgeDocumentParserTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/indexing/parse/TextKnowledgeDocumentParserTest.java)、[MarkdownKnowledgeDocumentParserTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/indexing/parse/MarkdownKnowledgeDocumentParserTest.java)、[Utf8TextDecoderTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/indexing/parse/Utf8TextDecoderTest.java)、[KnowledgeParserConfigurationTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/indexing/config/KnowledgeParserConfigurationTest.java)、[KnowledgeTextParsingBuildIntegrationTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/indexing/parse/KnowledgeTextParsingBuildIntegrationTest.java) |
 | 基础服务与构建编排 | [knowledge 基础 service](../../src/main/java/com/item/aisummary/application/knowledge/service/)、[indexing/build](../../src/main/java/com/item/aisummary/application/knowledge/indexing/build/)；[KnowledgeIndexBuildServiceTest](../../src/test/java/com/item/aisummary/application/knowledge/indexing/build/KnowledgeIndexBuildServiceTest.java)、[KnowledgeBuildLifecycleServiceIntegrationTest](../../src/test/java/com/item/aisummary/application/knowledge/indexing/build/KnowledgeBuildLifecycleServiceIntegrationTest.java)、[KnowledgeProcessingRouterTest](../../src/test/java/com/item/aisummary/application/knowledge/indexing/build/KnowledgeProcessingRouterTest.java) |
 | 源与解析合同 | [indexing/source](../../src/main/java/com/item/aisummary/application/knowledge/indexing/source/)、[indexing/parse](../../src/main/java/com/item/aisummary/application/knowledge/indexing/parse/)；[KnowledgeSourceReaderTest](../../src/test/java/com/item/aisummary/application/knowledge/indexing/source/KnowledgeSourceReaderTest.java)、[FileFormatTest](../../src/test/java/com/item/aisummary/application/knowledge/indexing/source/FileFormatTest.java)、[KnowledgeParseContractsTest](../../src/test/java/com/item/aisummary/application/knowledge/indexing/parse/KnowledgeParseContractsTest.java) |
 | 分块合同与组保存 | [indexing/chunk](../../src/main/java/com/item/aisummary/application/knowledge/indexing/chunk/)；[KnowledgeChunkerContractsTest](../../src/test/java/com/item/aisummary/application/knowledge/indexing/chunk/KnowledgeChunkerContractsTest.java)、[KnowledgeChunkGroupWriterTest](../../src/test/java/com/item/aisummary/application/knowledge/indexing/chunk/KnowledgeChunkGroupWriterTest.java)、[KnowledgeChunkServiceTest](../../src/test/java/com/item/aisummary/application/knowledge/service/KnowledgeChunkServiceTest.java) |
@@ -90,4 +195,4 @@ RAG 配置变量和现有默认值见[配置说明](../reference/configuration.m
 | 向量适配器 | [infrastructure `indexing/vector`](../../src/main/java/com/item/aisummary/infrastructure/knowledge/indexing/vector/)；[SpringAiKnowledgeVectorIndexTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/indexing/vector/SpringAiKnowledgeVectorIndexTest.java) |
 | RAG 配置参数 | [infrastructure `indexing/config`](../../src/main/java/com/item/aisummary/infrastructure/knowledge/indexing/config/)；[KnowledgeRagConfigurationTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/indexing/config/KnowledgeRagConfigurationTest.java)、[KnowledgeRagPropertiesTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/indexing/config/KnowledgeRagPropertiesTest.java) |
 
-上述测试覆盖固定编排、局部持久化/适配合同和失败行为，不验证真实 parser/chunker、真实文本语义/切分质量、OpenAI/Qdrant 网络调用或生产 MySQL。完整普通测试与外部验收边界见[测试说明](../guides/testing.md)。
+上述测试覆盖生产解析器与切分器真实行为（不访问网络）、本地构建集成流转（`KnowledgeChunkingBuildIntegrationTest` 与 `KnowledgeTextParsingBuildIntegrationTest` 在隔离 H2 下配合替身验证，清楚非外部端到端）、固定编排、局部持久化/适配合同和失败行为；解析与切分实现不代表真实外部服务已验收或生产端到端完成。完整普通测试与外部验收边界见[测试说明](../guides/testing.md)。

@@ -60,7 +60,7 @@ SPRING_AI_MODEL_CHAT=none
 
 ## RAG 构建配置
 
-RAG 构建默认关闭，基础元数据与健康接口不需要模型或向量凭据。启用时除 `APP_KNOWLEDGE_RAG_ENABLED=true` 外，还要求 Embedding=`openai`、向量存储=`qdrant`，并在应用中注册至少一个生产解析策略与 FLAT 分块策略；任何条件不满足都会拒绝启动。当前没有生产解析器或分块器，所以仅设置下表变量不会启用可用的 txt/md 入库。表中既有变量和默认值保持不变；分块相关参数当前只是交给未来策略的选项。
+RAG 构建默认关闭，基础元数据与健康接口不需要模型或向量凭据。启用时除 `APP_KNOWLEDGE_RAG_ENABLED=true` 外，还要求 Embedding=`openai`、向量存储=`qdrant`，并在应用中注册至少一个生产解析策略与 FLAT 分块策略；缺少外部后端依赖或配套 Bean 缺失时仍拒绝启动。当前已通过 `KnowledgeParserConfiguration` 与 `KnowledgeChunkerConfiguration` 在 RAG 开启时分别注册 TXT/Markdown 生产解析器与 `TokenBudgetKnowledgeChunker`（FLAT 与 PARENT_CHILD 两种模式）。两解析器构造参数复用 `maxSourceSize`（绑定 `APP_FILE_MAX_SIZE`）；切分策略消费 `ChunkingOptions` 参数。解析与切分实现不代表真实外部服务已验收或生产端到端完成。
 
 变量通过主配置映射到 Spring AI 2.0.1 的 Embedding 与 Qdrant 属性。
 
@@ -79,16 +79,18 @@ RAG 构建默认关闭，基础元数据与健康接口不需要模型或向量�
 | `QDRANT_COLLECTION_NAME` | `knowledge_chunks` | 向量集合；验收使用独立集合 |
 | `QDRANT_INITIALIZE_SCHEMA` | `false` | true 时创建缺失集合，不迁移已有集合维度 |
 | `RAG_BATCH_SIZE` | `128` | 范围 1～1024；数据库保存的目标组批大小、不拆分组；向量写入使用该精确批量上限，尾批可不足 |
-| `RAG_CHUNK_SIZE` | `512` | 正整数，作为分块策略选项传入；当前没有 Token 分块实现 |
-| `RAG_MIN_CHUNK_SIZE_CHARS` | `200` | 非负，作为分块策略选项传入；当前不执行标点切分 |
+| `RAG_CHUNK_SIZE` | `512` | 正整数，子检索块目标尺寸上限（Token 单位，CL100K_BASE 计数） |
+| `RAG_PARENT_CHUNK_SIZE` | `2048` | 正整数，父上下文块目标尺寸上限（Token 单位，必须 `>= RAG_CHUNK_SIZE`） |
+| `RAG_CHUNK_OVERLAP` | `0` | 非负整数，子检索块重叠目标尺寸（Token 单位，必须满足 `0 <= RAG_CHUNK_OVERLAP < RAG_CHUNK_SIZE`） |
+| `RAG_MIN_CHUNK_SIZE_CHARS` | `200` | 非负，标点断句的短块软阈值（字符数），低于此阈值尽量不切断，但不丢弃短尾 |
 | `RAG_MIN_CHUNK_LENGTH_TO_EMBED` | `0` | 当前只允许 0，作为策略选项；编排不据此过滤短块 |
 | `RAG_MAX_NUM_CHUNKS` | `100000` | 正整数，限制一个构建的全部角色片段总数（CONTEXT 与 RETRIEVAL 均计入） |
-| `RAG_KEEP_SEPARATOR` | `true` | 传递给策略；当前没有使用该选项的分块算法 |
+| `RAG_KEEP_SEPARATOR` | `true` | 是否原样保留换行；`false` 仅普通文本 CR/LF 一对一替换为空格（结构块始终保留换行），不删标点不 trim |
 | `RAG_PUNCTUATION_MARKS` | `.?!;。？！；` 与换行 | 非空字符串，传递给策略；Properties 中 `\n` 表示换行 |
 
-原始源文件大小上限复用 `APP_FILE_MAX_SIZE`，默认 20 MB，必须为正且小于 Integer.MAX_VALUE 字节。当前 `KnowledgeSourceReader` 会将限量原字节预读到内存并校验大小和 SHA-256，不执行 UTF-8 解码；未来文本解析器需自行严格验证 UTF-8。当前没有生产 Reader、parser 或 splitter。
+原始源文件大小上限复用 `APP_FILE_MAX_SIZE`，默认 20 MB，必须为正且小于 Integer.MAX_VALUE 字节。`KnowledgeSourceReader` 会将限量原字节预读到内存并校验大小和 SHA-256，不执行 UTF-8 解码；生产 TXT 与 Markdown 解析器委托 `Utf8TextDecoder` 负责严格 UTF-8 校验与换行符规整。
 
-两参数内部调用 `KnowledgeIndexBuildService.build(actorUserId,documentId)` 默认选择 FLAT；第三参数可显式指定 PARENT_CHILD。模式不对应环境变量，策略由应用注册；现在两种生产分块策略都不存在。固定编排将数据库片段按整组保存，组不会因达到 `RAG_BATCH_SIZE` 而拆开；向量只包括 RETRIEVAL 并使用精确批次上限。普通测试使用策略和 VectorStore 替身，不进行真实解析、切分或外部调用。合同与失败边界见[知识库模块](../modules/knowledge.md)。
+两参数内部调用 `KnowledgeIndexBuildService.build(actorUserId,documentId)` 默认选择 FLAT；第三参数可显式指定 PARENT_CHILD。模式不对应环境变量，策略由应用注册；现在生产解析器已提供 TXT/Markdown 实现，切分策略已提供 `TokenBudgetKnowledgeChunker`（FLAT 与 PARENT_CHILD 模式）。固定编排将数据库片段按整组保存，组不会因达到 `RAG_BATCH_SIZE` 而拆开；向量只包括 RETRIEVAL 并使用精确批次上限。普通测试中解析器与切分器真实单测验证行为（无网络请求），编排与向量使用分块和 VectorStore 替身，以及 H2 下的本地构建集成测试覆盖链路，解析与切分实现不代表真实外部服务已验收或生产端到端完成。完整解析与切分规则、合同与失败边界见[知识库模块](../modules/knowledge.md)。
 
 ## 模拟身份
 

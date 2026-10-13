@@ -16,6 +16,11 @@ import java.util.List;
 public final class KnowledgeChunkGroupWriter {
     private final KnowledgeChunkService chunks;
 
+    /**
+     * 构造分块组保存转换器。
+     *
+     * @param chunks Spring 代理管理的知识片段应用服务
+     */
     public KnowledgeChunkGroupWriter(KnowledgeChunkService chunks) {
         this.chunks = chunks;
     }
@@ -57,6 +62,15 @@ public final class KnowledgeChunkGroupWriter {
         return chunks.saveBatch(revisionId, List.copyOf(commands));
     }
 
+    /**
+     * 将单个分块草稿（ChunkDraft）转换为底层持久化命令（SaveKnowledgeChunkCommand）。
+     *
+     * @param draft 分块草稿对象
+     * @param sequence 当前片段分配到的版本内全局序号
+     * @param role 片段角色（CONTEXT 或 RETRIEVAL）
+     * @param parentSequence 关联的父上下文块全局序号（可为 null）
+     * @return 组装后的片段保存命令模型
+     */
     private static SaveKnowledgeChunkCommand toCommand(
             ChunkDraft draft, int sequence, ChunkRole role, Integer parentSequence) {
         var source = draft.source();
