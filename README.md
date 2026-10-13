@@ -13,7 +13,7 @@
 
 用户、文件及知识库元数据使用 MySQL，文件对象按配置存入 MinIO 或阿里云 OSS。H2 仅用于自动测试。聊天模型、Embedding、Qdrant、RAG 构建和对象存储默认关闭。当前无生产解析器/分块器；仅设置 RAG 配置会因缺少策略而拒绝启动，不能据此启用真实 txt/md 入库。固定编排与向量适配由替身测试覆盖，真实解析、切分及外部服务调用尚未验收。
 
-知识库能力通过内部 Java 服务提供。构建入口 `KnowledgeIndexBuildService.build(actorUserId,knowledgeDocumentId)` 默认选择 FLAT；也可由内部调用显式选择 PARENT_CHILD。两种模式都要求已注册的解析与分块策略，目前生产环境没有这些策略。当前没有知识库 HTTP、访问权限、检索或问答；文件归属检查不等于知识库授权。片段存储支持 CONTEXT/RETRIEVAL 角色和同版本父引用，但不含具体父子切分策略。字段与约束见 [知识库表结构](./docs/reference/database/knowledge.md#knowledge_chunk)，旧表需要另行手动升级，初始化脚本不会自动添加新列。
+知识库能力通过内部 Java 服务提供。RAG 专用构建、源读取、解析、分块和向量合同聚合在 `application.knowledge.indexing/{build,source,parse,chunk,vector}`，基础服务、保存命令和仓储合同保持独立。构建入口 `KnowledgeIndexBuildService.build(actorUserId,knowledgeDocumentId)` 默认选择 FLAT；也可由内部调用显式选择 PARENT_CHILD。两种模式都要求已注册的解析与分块策略，目前生产环境没有这些策略。当前没有知识库 HTTP、访问权限、检索或问答；文件归属检查不等于知识库授权。片段存储支持 CONTEXT/RETRIEVAL 角色和同版本父引用，但不含具体父子切分策略。字段与约束见 [知识库表结构](./docs/reference/database/knowledge.md#knowledge_chunk)，旧表需要另行手动升级，初始化脚本不会自动添加新列。
 
 ## 快速开始
 

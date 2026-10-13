@@ -26,11 +26,12 @@ mvn clean verify
 | 文件 HTTP 边界 | 身份、Key、数据库单边失败、真实容器 multipart 上限 | `FileAuthenticationHttpTest`、`FileKeyValidationHttpTest`、`FileFailureHttpTest`、`FileMultipartHttpTest` |
 | 存储与装配 | SDK 元数据、GET 签名、OSS 资源关闭、稳定异常、条件配置 | `StorageAdapterTest`、`FileConfigurationTest` |
 | 公共错误 | 不支持的 Content-Type 返回 415、响应字段、协议头和请求标识 | `GlobalExceptionHandlerHttpTest` |
-| 知识库领域与持久化 | 位置规则、四表 MyBatis Mapper/H2、联合唯一约束、标题 JSON、可空字段与 UTC 微秒 | `KnowledgeRulesTest`、`KnowledgePersistenceTest` |
+| 知识库领域与持久化 | SourceLocation 位置规则、四表 MyBatis Mapper/H2、联合唯一约束、标题 JSON、可空字段与 UTC 微秒 | `KnowledgeRulesTest`、`SourceLocationTest`、`KnowledgePersistenceTest` |
 | 知识库内部用例 | 多库同名、改名、文档关联与文件归属、版本递增及并发唯一冲突 | `KnowledgeServicesTest` |
 | 知识片段事务 | 追加、排序、实际计数、非 building 拒绝、半批失败和计数更新失败回滚、并发追加 | `KnowledgeChunkServiceTest` |
-| RAG 源读取与策略合同 | 原字节大小/SHA-256、流资源归属、parser/chunker 路由及数据合同 | `KnowledgeSourceReaderTest`、`KnowledgeProcessingContractsTest`、`KnowledgeProcessingRouterTest` |
-| RAG 编排与生命周期 | 替身策略、组式保存、全部角色上限、精确向量批次、仅 RETRIEVAL 向量化、发布/失败/清理和事务行为 | `KnowledgeIndexBuildServiceTest`、`KnowledgeChunkGroupsTest`、`KnowledgeBuildLifecycleServiceIntegrationTest` |
+| RAG 源与解析合同 | 原字节大小/SHA-256、流资源归属、格式声明及解析数据合同 | `KnowledgeSourceReaderTest`、`FileFormatTest`、`KnowledgeParseContractsTest` |
+| RAG 路由与构建生命周期 | 策略路由、替身策略、全部角色上限、精确向量批次、仅 RETRIEVAL 向量化、发布/失败/清理和事务行为 | `KnowledgeProcessingRouterTest`、`KnowledgeIndexBuildServiceTest`、`KnowledgeBuildLifecycleServiceIntegrationTest` |
+| RAG 分块与组写入 | 分块合同、整组序号/角色/父序号映射与基础保存服务代理调用 | `KnowledgeChunkerContractsTest`、`KnowledgeChunkGroupWriterTest`、`KnowledgeChunkServiceTest` |
 | 向量适配与配置 | VectorStore 替身上的 UUID/metadata/过滤/安全异常；默认关闭、缺策略或依赖时拒绝启动 | `SpringAiKnowledgeVectorIndexTest`、`KnowledgeRagConfigurationTest`、`KnowledgeRagPropertiesTest` |
 
 [用户说明](../modules/user.md#测试与学习入口)、[文件说明](../modules/file.md#测试与学习入口) 和 [知识库说明](../modules/knowledge.md#表结构配置与验证入口) 提供测试源码链接及对应规则。
@@ -49,16 +50,16 @@ mvn -Dtest=UserServiceTest,UserRepositoryTest,UserHttpTest test
 mvn -Dtest=FileRulesTest,FileServiceTest,FileKeyValidationHttpTest test
 ```
 
-只检查知识库四表和内部服务时：
+只检查知识库领域、四表、基础服务和片段事务时：
 
 ```bash
-mvn -Dtest=KnowledgeRulesTest,KnowledgePersistenceTest,KnowledgeServicesTest,KnowledgeChunkServiceTest test
+mvn -Dtest=KnowledgeRulesTest,SourceLocationTest,KnowledgePersistenceTest,KnowledgeServicesTest,KnowledgeChunkServiceTest test
 ```
 
-检查固定构建编排、组式保存与发布时：
+检查 RAG 源/解析/分块合同、路由、组 writer、构建生命周期、向量适配与配置时：
 
 ```bash
-mvn -Dtest=KnowledgeSourceReaderTest,KnowledgeProcessingContractsTest,KnowledgeProcessingRouterTest,SpringAiKnowledgeVectorIndexTest,KnowledgeChunkGroupsTest,KnowledgeBuildLifecycleServiceIntegrationTest,KnowledgeIndexBuildServiceTest,KnowledgeRagConfigurationTest,KnowledgeRagPropertiesTest test
+mvn -Dtest=KnowledgeSourceReaderTest,FileFormatTest,KnowledgeParseContractsTest,KnowledgeProcessingRouterTest,KnowledgeChunkerContractsTest,KnowledgeChunkGroupWriterTest,KnowledgeIndexBuildServiceTest,KnowledgeBuildLifecycleServiceIntegrationTest,SpringAiKnowledgeVectorIndexTest,KnowledgeRagConfigurationTest,KnowledgeRagPropertiesTest test
 ```
 
 构建编排的 parser/chunker 和 VectorStore 均使用替身；不测试生产 Reader/Splitter，也不进行真实解析、切分、OpenAI 或 Qdrant 调用。发布 SQL 失败使用 H2 临时 CHECK 约束注入，不修改生产规则。

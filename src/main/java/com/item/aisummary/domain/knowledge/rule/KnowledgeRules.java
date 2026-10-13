@@ -83,6 +83,16 @@ public final class KnowledgeRules {
         if (tokenCount != null && tokenCount < 0) {
             throw new IllegalArgumentException("Token 数量不能为负数");
         }
+        requireLocation(startOffset, endOffset, pageStart, pageEnd);
+    }
+
+    /**
+     * 校验来源位置；未知范围允许为空，已知范围必须成对且满足全文偏移或页码约束。
+     *
+     * <p>只校验范围形状，不证明其来源可靠性，也不以片段正文长度限制全文偏移。
+     */
+    public static void requireLocation(
+            Integer startOffset, Integer endOffset, Integer pageStart, Integer pageEnd) {
         if ((startOffset == null) != (endOffset == null)
                 || (startOffset != null && (startOffset < 0 || startOffset >= endOffset))) {
             throw new IllegalArgumentException("字符偏移必须同时为空或满足 0 <= start_offset < end_offset");

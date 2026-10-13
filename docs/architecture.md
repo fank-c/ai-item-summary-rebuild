@@ -38,22 +38,52 @@ web ───────────────→ application ─────
 | `web.health`、`web.error` | 保持单一职责 | 健康检查与公共异常转换 |
 | `application.user` | `service`、`command`、`result`、`port`、`reference` | 用户用例、输入输出、外部能力及用户引用合同 |
 | `application.file` | `service`、`content`、`policy`、`result`、`port` | 文件用例、内容读取合同、约束和外部能力 |
-| `application.knowledge` | `service`、`command`、`result`、`port`、`processing`、`exception` | 基础与入库用例、索引输入、构建结果、仓储及策略 ports、统一处理模型/路由与源字节准备 |
+| `application.knowledge` | 基础 `service`（KnowledgeBase/Document/Revision/Chunk 四服务）、`command/SaveKnowledgeChunkCommand`、`port`（四仓储）、`indexing/{build,source,parse,chunk,vector}` | 基础用例与持久化合同独立于 RAG 专用构建流程；indexing 按能力聚合上下文/结果/阶段/异常、原字节源读取、解析合同、分块合同与组写入、向量合同，不在组内再分 service/port/model |
 | `domain.user` | `model`、`exception` | 用户数据和未找到异常 |
 | `domain.file` | `model`、`rule`、`exception` | 文件数据、文本规则与业务异常 |
-| `domain.knowledge` | `model`、`value`、`enums`、`rule`、`exception` | 四表记录、标题、状态、输入规则与异常 |
-| `infrastructure.user / file / knowledge` | `config`、`persistence`，以及已有 `reference / storage` | 装配、数据库适配、用户引用和对象存储 |
+| `domain.knowledge` | `model`、`value`、`enums`、`rule`、`exception` | 四表记录、标题及 `SourceLocation` 值对象、状态、输入规则与异常；位置约束由 `KnowledgeRules.requireLocation` 提供 |
+| `infrastructure.user / file / knowledge` | 基础 `config`、`persistence`，以及已有 `reference / storage`；知识库另有 `indexing/config`、`indexing/vector` | 基础装配和持久化保持原位；RAG 条件装配/Properties 与 Spring AI 向量适配归入 indexing |
 | `infrastructure.auth` | `config`、`web` | 模拟身份配置与请求集成 |
 | `infrastructure.persistence.typehandler`、`infrastructure.time` | 公共基础能力 | UTC 类型转换与共享时钟 |
 
-知识库应用层 `processing` 集中维护 `PreparedSource`、`ParsedDocument`、`ContentBlock`、`ChunkDraft`、`ChunkGroupDraft`、模式/选项、策略路由和源读取器；这些是本次处理合同，不是数据库实体或具体解析算法。`port` 中的 `KnowledgeDocumentParser`、`KnowledgeChunker` 独立选择，主构建服务不会依据格式编写多套流程。
+知识库 RAG 合同与流程位于 `application.knowledge.indexing`，按能力组织，而非基础服务分层：
+
+```text
+indexing/
+├── build/   # KnowledgeIndexBuildService、KnowledgeBuildLifecycleService、KnowledgeProcessingRouter、构建上下文/结果/阶段/异常
+├── source/  # KnowledgeSourceReader、PreparedSource、FileFormat、KnowledgeSourceException
+├── parse/   # KnowledgeDocumentParser、ParsedDocument、ContentBlock、ContentBlockType
+├── chunk/   # KnowledgeChunker、ChunkingMode/Options、ChunkDraft、ChunkGroupDraft、KnowledgeChunkGroupWriter
+└── vector/  # KnowledgeVectorIndex、KnowledgeVectorEntry
+```
+
+这些类型是处理合同、编排服务或外部能力接口，不是数据库实体或具体解析/分块算法。构建服务通过 `KnowledgeProcessingRouter` 选择 parser 与 chunker；组写入器把构建组转成基础 `SaveKnowledgeChunkCommand`，并调用基础 `KnowledgeChunkService.saveBatch`。基础服务不反向依赖 indexing。`KnowledgeChunkService` 与四个基础仓储 port 继续位于原有 `service`、`port` 包。
+
+知识库基础设施的 `config/KnowledgeConfiguration` 和全部 `persistence` 保持不动；RAG 专用 `KnowledgeRagConfiguration`、`KnowledgeRagProperties` 位于 `infrastructure.knowledge.indexing.config`，Spring AI 向量适配位于 `infrastructure.knowledge.indexing.vector`。`SourceLocation` 留在 `domain.knowledge.value`，其偏移/页码规则由 `KnowledgeRules.requireLocation` 校验。
+
+```mermaid
+graph LR
+  Build[application.knowledge.indexing.build] --> Source[application.knowledge.indexing.source]
+  Build --> Parse[application.knowledge.indexing.parse]
+  Build --> Chunk[application.knowledge.indexing.chunk]
+  Build --> VectorPort[application.knowledge.indexing.vector]
+  Chunk --> Command[application.knowledge.command]
+  Chunk --> BaseService[application.knowledge.service.KnowledgeChunkService]
+  BaseService --> Repository[application.knowledge.port]
+  VectorAdapter[infrastructure.knowledge.indexing.vector] -.implements.-> VectorPort
+  Config[infrastructure.knowledge.indexing.config] -.wires.-> Build
+```
+
+向量适配与组 writer 分别实现向量和持久化调用边界；RAG 配置负责条件装配，不改变基础仓储或表结构。
 
 三个业务的 MyBatis 文件统一按职责分类。以知识库为例：
 
 ```text
 infrastructure/knowledge/
-├── config/            # 基础装配、RAG 条件装配与参数
-├── ai/                # 已实现的 Spring AI 向量适配（没有生产 Reader/Splitter）
+├── config/            # 基础 KnowledgeConfiguration
+├── indexing/
+│   ├── config/        # RAG 条件装配、KnowledgeRagProperties
+│   └── vector/        # 已实现的 Spring AI 向量适配（没有生产 Reader/Splitter）
 └── persistence/
     ├── entity/        # 四表数据库实体
     ├── mapper/        # 四个 Mapper，封装 SQL 入口
@@ -94,9 +124,9 @@ infrastructure/knowledge/
 
 知识文档登记通过 `FileContentService.requireOwnedProcessable` 检查源文件元数据及归属，不读取正文。关联存在性由应用服务检查，三组联合唯一约束由数据库兜底。版本号采用 MAX + 1，竞争冲突明确失败。
 
-片段批次与版本生命周期分别使用短事务。`KnowledgeChunkService.saveBatch` 使用 Spring 事务与 READ_COMMITTED 隔离级别，锁定版本后插入并更新实际总数；失败整批回滚，同版本并发追加串行执行。`KnowledgeBuildLifecycleService` 创建构建时锁文档防止重复 building，发布时在同一事务中更新 ready、活动指针和旧版本 superseded。
+片段批次与版本生命周期分别使用短事务。`KnowledgeChunkService.saveBatch` 是基础服务的事务入口，使用 Spring 事务与 READ_COMMITTED 隔离级别，锁定版本后插入并更新实际总数；失败整批回滚，同版本并发追加串行执行。`KnowledgeChunkGroupWriter.saveGroups` 在构建侧为传入的整批组分配连续序号、角色和父序号，转换为 `SaveKnowledgeChunkCommand` 后一次调用通过 Spring 注入的 `KnowledgeChunkService` 代理；writer 不声明事务、不自行创建事务服务。`KnowledgeBuildLifecycleService` 创建构建时锁文档防止重复 building，发布时在同一事务中更新 ready、活动指针和旧版本 superseded。
 
-`KnowledgeIndexBuildService.build` 拒绝外层事务；文件读取、Embedding、Qdrant 和旧向量清理均在数据库事务外执行。数据库与 Qdrant 没有共同回滚，失败或旧向量清理也不能替代后续检索的活动版本过滤。
+`KnowledgeIndexBuildService.build` 拒绝外层事务；文件读取、策略执行、Embedding、Qdrant 和旧向量清理均在数据库事务外执行。组写入期间仅基础 `KnowledgeChunkService.saveBatch` 的数据库事务开启。数据库与 Qdrant 没有共同回滚，失败或旧向量清理也不能替代后续检索的活动版本过滤。
 
 MySQL 的 `DATETIME(6)` 不保存时区。[UtcInstantTypeHandler](../src/main/java/com/item/aisummary/infrastructure/persistence/typehandler/UtcInstantTypeHandler.java) 显式按 UTC 在数据库时间与 `Instant` 之间转换。连接与会话也必须使用 UTC，历史时间不能未经确认直接解释为 UTC。
 
@@ -104,7 +134,7 @@ MySQL 的 `DATETIME(6)` 不保存时区。[UtcInstantTypeHandler](../src/main/ja
 
 模型和存储默认关闭；普通测试使用 H2、Mock 或内存存储替身。健康接口不探测这些外部服务。
 
-Spring AI 依赖用于未来模型能力与当前向量适配。当前已实现的 RAG 固定骨架包含策略 ports、格式/模式路由、预读原始字节并核对大小与 SHA-256、按组保存片段、向量批次和版本生命周期；没有生产文档解析器或分块器，也没有生产 `TextReader`、`MarkdownDocumentReader` 或 `TokenTextSplitter` 流程。`PreparedSource` 保存同一份已验证原始字节，但不执行 UTF-8 解码；未来文本解析器负责该校验。
+Spring AI 依赖用于未来模型能力与当前向量适配。当前已实现的 RAG 固定骨架包含专用 indexing 合同、格式/模式路由、预读原始字节并核对大小与 SHA-256、组式 chunk writer、向量批次和版本生命周期；没有生产文档解析器或分块器，也没有生产 `TextReader`、`MarkdownDocumentReader` 或 `TokenTextSplitter` 流程。`PreparedSource` 保存同一份已验证原始字节，但不执行 UTF-8 解码；未来文本解析器负责该校验。
 
 RAG 默认关闭。开启时需有实际注册的解析与 FLAT 分块策略、OpenAI Embedding 及 Qdrant 适配器，否则启动失败；配置变量本身不能启用真实 txt/md 处理。策略替身测试可覆盖固定编排、本地持久化与向量边界，但不等价于真实解析、切分或外部调用验收。`build(actor,document)` 默认选 FLAT，内部第三参数可选 PARENT_CHILD，不新增模式配置项。数据库批次以整组为单位，`RAG_BATCH_SIZE` 不拆组；向量仅写 RETRIEVAL 且使用精确批次上限，`RAG_MAX_NUM_CHUNKS` 统计所有角色。
 

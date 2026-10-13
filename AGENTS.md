@@ -55,16 +55,23 @@ src/main/java/com/item/aisummary/
 ├── application/
 │   ├── user/          # service、command、result、port、reference
 │   ├── file/          # service、content、policy、result、port
-│   ├── knowledge/     # service、command、result、port、exception、processing
+│   ├── knowledge/
+│   │   ├── service/   # KnowledgeBase/Document/Revision/Chunk 四个基础服务
+│   │   ├── command/   # SaveKnowledgeChunkCommand
+│   │   ├── port/      # 四个基础仓储接口
+│   │   └── indexing/  # build、source、parse、chunk、vector 专用能力组
 │   └── auth/          # 最小请求身份、身份 ID 规则及缺少身份异常
 ├── domain/
 │   ├── user/          # model、exception
 │   ├── file/          # model、rule、exception
-│   └── knowledge/     # model、value、enums、rule、exception
+│   └── knowledge/     # model、value（含 SourceLocation）、enums、rule、exception
 └── infrastructure/
     ├── user/          # config、persistence、reference
     ├── file/          # config、persistence、storage
-    ├── knowledge/     # config、persistence、已实现的 Spring AI 向量适配
+    ├── knowledge/
+    │   ├── config/    # 基础 KnowledgeConfiguration
+    │   ├── persistence/ # 四表 MyBatis 持久化及类型处理
+    │   └── indexing/  # config（RAG 条件配置/Properties）、vector（Spring AI 适配）
     ├── persistence/   # 共享 UTC typehandler
     ├── time/          # 共享 UTC Clock 装配
     ├── security/      # BCrypt 摘要适配
@@ -80,9 +87,9 @@ deploy/mysql/schema.sql             # 正式用户、文件及知识库四张核
 ### 工程组织原则
 
 - 当前采用单个 Maven 工程，通过 Java 包划分模块职责。
-- 保留 `web / application / domain / infrastructure` 四层结构，按“层 → 业务 → 职责”组织，例如 `web.user.controller`、`application.knowledge.service` 和 `domain.knowledge.model`；对话、RAG 等功能沿用相同方式。
-- Web 按 `controller / request / response` 分类；应用按 `service / command / result / port` 分类，跨模块用户引用与文件内容读取分别集中在 `reference / content`。领域按实际职责使用 `model / value / enums / rule / exception`，不把不同层的数据对象统一塞入 DTO 包。
-- 基础设施装配与配置绑定位于各业务 `config`；MyBatis 按 `persistence.entity / mapper / repository / typehandler` 分包，厂商存储适配留在 `storage`。共享 UTC 类型处理器位于 `infrastructure.persistence.typehandler`，共享时钟位于 `infrastructure.time.ClockConfiguration`，业务模块通过注入使用时钟。
+- 保留 `web / application / domain / infrastructure` 四层结构，按“层 → 业务 → 职责”组织，例如 `web.user.controller`、`application.knowledge.service` 和 `domain.knowledge.model`；RAG 专用流程在 `application.knowledge.indexing` 下按能力聚合，不强行套用基础服务的分层目录。
+- Web 按 `controller / request / response` 分类；基础应用服务按 `service / command / result / port` 分类，跨模块用户引用与文件内容读取分别集中在 `reference / content`。领域按实际职责使用 `model / value / enums / rule / exception`，不把不同层的数据对象统一塞入 DTO 包。
+- 基础设施装配与配置绑定位于各业务 `config`；RAG 专用配置与 Properties 放在 `infrastructure.knowledge.indexing.config`，向量适配放在 `infrastructure.knowledge.indexing.vector`。MyBatis 按 `persistence.entity / mapper / repository / typehandler` 分包，厂商存储适配留在 `storage`。共享 UTC 类型处理器位于 `infrastructure.persistence.typehandler`，共享时钟位于 `infrastructure.time.ClockConfiguration`，业务模块通过注入使用时钟。
 - `application.auth`、`web.error`、用户引用和已有 SDK 适配等单一职责包不强制继续细分。跨职责引用使用显式导入，测试沿用对应生产包，集成测试按主要验证职责归类。
 - 按实际业务需求逐步创建包和类，不提前创建空目录，也不为了凑齐层次创建无职责的类。
 - 当前不拆分多个 Maven 模块。后续确有独立复用、发布或依赖隔离需求时，再评估拆分。
@@ -281,11 +288,12 @@ SDK 超时要求正整数毫秒且不超过 Integer.MAX_VALUE 毫秒；不保证
 - 服务按用例组织，无 Service/Impl 套层。`KnowledgeBaseService` 创建、详情、列表和改名；名称 trim 后非空白且最多 100 个 Java 字符，允许多库同名。业务 ID 为 32 位 UUID，时钟复用现有 Clock 并截断到微秒。
 - `KnowledgeDocumentService.register(actorUserId,knowledgeBaseId,fileId)` 先校验显式身份及库存在，再通过 `FileContentService.requireOwnedProcessable` 校验源文件。只查询元数据；不得读取正文、调用文件 Mapper 或将文件归属视为知识库授权。新文档 status=1、index_status=pending，活动版本和失败摘要为空。
 - 重复库内文件登记报 `DOCUMENT_ALREADY_REGISTERED`，数据库唯一索引兜底。`KnowledgeRevisionService.create(documentId)` 先确认文档存在，使用 MAX + 1 创建 building 版本；竞争报 `REVISION_NUMBER_CONFLICT`，达到 int 上限报 `REVISION_NUMBER_EXHAUSTED`，不自动重试。新版本 chunk_count=0，created_at/started_at 为进入 building 的时间，摘要、失败信息和其他生命周期时间为空，不修改文档活动版本。
-- `KnowledgeChunkService.saveBatch(revisionId,commands)` 只接受 building 版本。输入没有 revisionId/片段 ID，所有片段由本次入口确定归属并生成新 ID。批次非空、正文非空白、序号为版本内非负全局顺序且批内唯一，父块和检索块共同占用，不表示原文位置；已存序号冲突报 `CHUNK_SEQUENCE_CONFLICT`，非 building 报 `REVISION_NOT_BUILDING`。不提供正文或关系更新接口。
+- `KnowledgeChunkService.saveBatch(revisionId,commands)` 是基础片段持久化入口，只接受 building 版本。输入没有 revisionId/片段 ID，所有片段由本次入口确定归属并生成新 ID。批次非空、正文非空白、序号为版本内非负全局顺序且批内唯一，父块和检索块共同占用，不表示原文位置；已存序号冲突报 `CHUNK_SEQUENCE_CONFLICT`，非 building 报 `REVISION_NOT_BUILDING`。不提供正文或关系更新接口。构建组保存由 indexing 层 `KnowledgeChunkGroupWriter` 负责；基础服务不提供 `saveGroups`，也不依赖 indexing 合同。
 - chunk 增加可空 `parent_chunk_id` 与必填、无数据库默认值的 `chunk_role`（CONTEXT/RETRIEVAL），保留版本内序号唯一并增加 `(revision_id,parent_chunk_id,sequence_no)` 索引。CONTEXT 必须无父，RETRIEVAL 可独立或引用同版本的无父 CONTEXT；只支持两层上下文关系，不保存任意深度章节树，不新增物理外键或 SQL CHECK。角色不表示文件格式或 TEXT/TABLE/CODE 内容类别。
 - `SaveKnowledgeChunkCommand.parentSequenceNo` 使用同版本全局序号引用本批或已存父块；服务预分配本批 ID，在版本锁内校验全部关系并转换为业务父 ID，返回仍按输入顺序。缺失父块抛 KnowledgeNotFoundException；缺失角色、负父序号、自引用、CONTEXT 有父及检索块作为父块抛 IllegalArgumentException，在任何插入前拒绝。父查询限定版本、不跨版本回退；原有命令和领域构造器明确创建无父 RETRIEVAL 普通块。父子正文分别保存，chunk_count 统计两种角色全部记录，不等于向量数量。不提供生产父子切分器或父块检索；构建骨架仅将已保存 RETRIEVAL 写向量，并保留活动版本约束。
 - 批次采用追加语义。通过 Spring 注入的服务调用事务入口，使用 READ_COMMITTED 并锁住目标版本；基础设施检查实际连接隔离级别，不兼容的外层事务在写入前明确失败。插入和实际总数更新在同一事务中，写入行数必须符合预期。数据库异常和业务冲突继续传播并回滚整批，兼容外层事务回滚也共同回滚；同版本并发批次串行执行。不自行 new 事务服务，也不添加通用事务框架。
 - `heading_path` 保持有序标题列表，标题层级为正、标题非空白；JSON NULL 与空数组分别还原。使用既有 Jackson 3 和专用类型处理器；MySQL 绑定 JSON 文本，H2 绑定原生 UTF-8 JSON 字节，避免把数组保存成字符串。
+- `SourceLocation` 保持在 `domain.knowledge.value`；`KnowledgeRules.requireLocation` 集中校验偏移与页码约束，供值对象和片段校验复用。知识领域字段及持久化仍为现有扁平 `start_offset/end_offset/page_start/page_end`，不引入位置嵌套列或 schema 变化。
 - token_count 可空，有值时非负，表示本行正文的计数，不累计子块。偏移同时空或满足 0 <= start_offset < end_offset，父子使用同一处理后全文 UTF-16 参照而非父块内偏移，无法可靠映射时为空；页码同时空或满足 1 <= page_start <= page_end。正文保留原样，不以片段长度限制全文偏移，不填充估算的 Token 数量或虚构位置。
 - 详情与按关联列表查询对不存在的关联抛 `KnowledgeNotFoundException`；合法但无子记录时返回空列表。版本按版本号升序、片段按 sequence_no 升序。内部异常尚未定义公开 HTTP 错误合同。
 - 知识库只保存自身信息，移除 `owner_user_id` 及其唯一索引。用户访问关系留待后续权限表管理，本次不创建权限表，也不将缺少所有者字段解释为公开访问。
@@ -297,13 +305,14 @@ SDK 超时要求正整数毫秒且不超过 Integer.MAX_VALUE 毫秒；不保证
 
 ### RAG 固定构建骨架约定
 
-- `KnowledgeIndexBuildService.build(actorUserId,documentId)` 是内部构建入口。两参数形式默认选择 `ChunkingMode.FLAT`；第三参数可显式指定 `FLAT` 或 `PARENT_CHILD`。模式只选择已注册的 `KnowledgeChunker`，不代表策略已实现。解析和切分分别由 `KnowledgeDocumentParser`、`KnowledgeChunker` ports 提供；当前没有生产实现。不得添加空操作或假装可用的默认策略。
-- 默认 `APP_KNOWLEDGE_RAG_ENABLED=false`。显式开启时要求已注册至少一个解析器、`FLAT` 分块器、OpenAI Embedding 与 Qdrant 适配器；缺任一项拒绝启动。当前无生产解析/分块策略，因此现有环境不能仅靠配置启用真实入库。PARENT_CHILD 分块器可选，未注册时调用该模式会在创建版本前失败。`FileFormat` 声明 TXT/MD/PDF/DOCX 路由类型不等于这些格式已有解析器。
+- `KnowledgeIndexBuildService.build(actorUserId,documentId)` 是内部构建入口。两参数形式默认选择 `ChunkingMode.FLAT`；第三参数可显式指定 `FLAT` 或 `PARENT_CHILD`。模式只选择已注册的 `KnowledgeChunker`，不代表策略已实现。解析和切分分别由 `KnowledgeDocumentParser`、`KnowledgeChunker` 应用合同提供；当前没有生产实现。不得添加空操作或假装可用的默认策略。
+- 默认 `APP_KNOWLEDGE_RAG_ENABLED=false`。显式开启时要求已注册至少一个解析器、`FLAT` 分块器、OpenAI Embedding 与 Qdrant 适配器；缺任一项拒绝启动。RAG 条件配置同时装配 `KnowledgeChunkGroupWriter`，不改变开关、模型/分块参数、表结构或 HTTP 接口。当前无生产解析/分块策略，因此现有环境不能仅靠配置启用真实入库。PARENT_CHILD 分块器可选，未注册时调用该模式会在创建版本前失败。`FileFormat` 声明 TXT/MD/PDF/DOCX 路由类型不等于这些格式已有解析器。
 - 显式身份、文档、文件归属/状态、文件名末段扩展名和相应策略在创建版本前检查。文件归属不代表知识库权限。构建开始通过 READ_COMMITTED 短事务锁文档，拒绝任何已有 building，返回 `BUILD_ALREADY_RUNNING`。MAX+1、状态与计数沿用现有四表，不自动重试，不新增状态字段或 published 枚举。进程中断的 building 恢复尚未实现。
 - 构建使用 `Propagation.NEVER` 拒绝外层数据库事务。生命周期入口以 READ_COMMITTED 短事务锁文档，MAX+1 创建版本；发布前校验活动快照、归属、全部片段真实总数和 RETRIEVAL 数，事务内完成 ready、源摘要、时间、文档活动指针/indexed 与旧版本 superseded。文件读取、策略执行和向量调用均不在数据库事务中。
+- `application.knowledge.indexing` 按 `build / source / parse / chunk / vector` 聚合 RAG 专用合同与流程；各组内部直接放置相关类，不再增加 `service / port / model` 子包。`build` 包含 `KnowledgeIndexBuildService`、`KnowledgeBuildLifecycleService`、`KnowledgeProcessingRouter`、`KnowledgeBuildContext`、`KnowledgeBuildResult`、`KnowledgeBuildStage`、`KnowledgeBuildException`；`source` 包含 `KnowledgeSourceReader`、`PreparedSource`、`FileFormat`、`KnowledgeSourceException`；`parse` 包含 `KnowledgeDocumentParser`、`ParsedDocument`、`ContentBlock`、`ContentBlockType`；`chunk` 包含 `KnowledgeChunker`、`ChunkingMode`、`ChunkingOptions`、`ChunkDraft`、`ChunkGroupDraft`、`KnowledgeChunkGroupWriter`；`vector` 包含 `KnowledgeVectorIndex`、`KnowledgeVectorEntry`。四个基础 service、`SaveKnowledgeChunkCommand` 和四个基础仓储 port 保持原位与职责边界。
 - `KnowledgeSourceReader` 预读原文件字节至受控内存，校验记录大小、实际大小上限和 SHA-256，产出可重复打开的 `PreparedSource`。源流仍由调用者关闭。该步骤不做 UTF-8 解码；未来文本解析器负责严格 UTF-8 校验，不能将当前源码描述为已有 txt/md Reader。
 - `ParsedDocument`、`ContentBlock`、`ChunkDraft` 与 `ChunkGroupDraft` 是固定数据合同，不含解析或分块算法。每组可含一个无父 CONTEXT 和非空 RETRIEVAL 列表，也可只含 RETRIEVAL；FLAT 不允许输出父块，PARENT_CHILD 可返回无父短内容组。组作为数据库批次单位，不拆开父子关系。`RAG_CHUNK_SIZE` 等选项仅传给策略，不代表当前使用 TokenTextSplitter 或某种切分结果。
-- 构建按组分配连续全局序号，保存全部角色；`RAG_MAX_NUM_CHUNKS` 统计 CONTEXT 与 RETRIEVAL 总数。`RAG_BATCH_SIZE` 是数据库分组保存的目标大小，过大的单组独立保存、不拆组；向量只包含已保存 RETRIEVAL，并严格按配置大小成批写入（末批可不足）。片段保存先于向量写入。未知标题、Token 数、偏移和页码保持为空。
+- 构建按组分配连续全局序号、角色和父序号；`KnowledgeChunkGroupWriter.saveGroups` 将整批组转换为现有 `SaveKnowledgeChunkCommand`，并一次调用通过 Spring 注入的 `KnowledgeChunkService.saveBatch` 代理。writer 不声明事务；实际事务由基础服务的代理入口提供。`RAG_MAX_NUM_CHUNKS` 统计 CONTEXT 与 RETRIEVAL 总数。`RAG_BATCH_SIZE` 是数据库分组保存的目标大小，过大的单组独立保存、不拆组；向量只包含已保存 RETRIEVAL，并严格按配置大小成批写入（末批可不足）。片段保存先于向量写入。未知标题、Token 数、偏移和页码保持为空。
 - 已实现的 Spring AI 向量适配器将已保存 RETRIEVAL 映射为 Document，沿用业务 UUID（为 32 位值补标准连字符），保留原始 `knowledge_chunk_id`，写入来源与父引用 metadata，并按 `revision_id` 精确过滤删除。适配器存在不表示当前已有真实解析/切分，也不表示已验收外部 Embedding/Qdrant 调用。
 - 发布发生在全部片段和向量成功后，短事务校验归属、building、实际总片段及 RETRIEVAL 计数和活动快照，再原子更新 ready、源摘要、完成与发布时间、文档活动指针/indexed 与旧版本 superseded。当前没有检索实现；未来检索必须读取 MySQL 活动指针并按 revision_id 过滤。
 - 普通构建失败标记 failed 并按当前 revision 尝试删除向量；首次失败文档 failed，重建失败保留旧活动指针与 indexed。MySQL 片段保留。向量删除成功才写 `cleaned_at`；删除失败保留原失败阶段/编码并追加固定摘要；删除已成功但完成事实写库失败时固定告警并返回清理未确认，不误记为向量删除失败。发布失败或提交结果不明时派生向量保留待核对，不盲目删除；确定的事务回滚不切换活动指针，不能把提交异常一概描述为已回滚。发布后旧向量清理失败不回滚新活动版本。

@@ -19,14 +19,15 @@
 | `KnowledgeBaseService` | `create(name)`、`findById(id)`、`findAll()`、`rename(id,name)`；名称裁剪后非空白且最多 100 个 Java 字符，允许同名多库 |
 | `KnowledgeDocumentService` | `register(actorUserId,knowledgeBaseId,fileId)`、详情与按库查询；校验显式身份、知识库存在和源文件所有权，只查询元数据 |
 | `KnowledgeRevisionService` | `create(documentId)`、详情与按文档查询；基础版本入口用 MAX+1 创建 building，不执行解析、索引或发布 |
-| `KnowledgeChunkService` | `saveBatch(revisionId,commands)` 追加普通片段；`saveGroups(revisionId,firstSequenceNo,groups)` 供构建编排按完整组保存 |
+| `KnowledgeChunkService` | `saveBatch(revisionId,commands)` 是基础片段批量持久化入口；只接受 building 版本，不包含构建组合同 |
 | `KnowledgeIndexBuildService` | `build(actorUserId,documentId)` 默认 FLAT；`build(actorUserId,documentId,mode)` 显式选择已注册的 FLAT 或 PARENT_CHILD 分块策略 |
 | `KnowledgeBuildLifecycleService` | begin/publish/fail/清理记录；短事务管理版本状态，不调用 parser、chunker 或向量后端 |
-| `KnowledgeDocumentParser` / `KnowledgeChunker` / `KnowledgeVectorIndex` | 应用层扩展合同；解析、分块与向量索引分别隔离，当前无生产 parser/chunker |
+| `KnowledgeChunkGroupWriter` | 构建侧组合同适配器；为组分配序号、角色和父序号，转换为既有命令并一次调用 `KnowledgeChunkService.saveBatch` |
+| `KnowledgeDocumentParser` / `KnowledgeChunker` / `KnowledgeVectorIndex` | 按 parse/chunk/vector 能力组织的应用层扩展合同；当前无生产 parser/chunker |
 
-构建入口只在 RAG 开关打开后装配。当前生产配置没有 parser/chunker Bean，因此 RAG 保持关闭；显式开启时缺少任一必要策略会拒绝启动，而不是装配空实现。即使补齐模型和 Qdrant 配置，也不能单独启用真实 txt/md 入库。
+构建入口和 `KnowledgeChunkGroupWriter` 只在 RAG 条件配置启用时装配。当前生产配置没有 parser/chunker Bean，因此 RAG 保持关闭；显式开启时缺少任一必要策略会拒绝启动，而不是装配空实现。即使补齐模型和 Qdrant 配置，也不能单独启用真实 txt/md 入库。
 
-通过 Spring 注入的代理使用构建服务，不能自行 `new` 事务服务或在外层事务中调用 `build`。构建方法使用 `Propagation.NEVER`；构建生命周期与片段写入各自在短事务中执行。构建结果与异常均为内部 Java 合同，当前没有公开 HTTP 错误映射。
+通过 Spring 注入的代理使用构建服务，不能自行 `new` 事务服务或在外层事务中调用 `build`。构建方法使用 `Propagation.NEVER`；构建生命周期与片段写入各自在短事务中执行。组 writer 本身没有事务注解，通过注入的 Spring `KnowledgeChunkService` 代理调用一次 `saveBatch`，由基础服务事务边界保障整批原子写入。构建结果与异常均为内部 Java 合同，当前没有公开 HTTP 错误映射。
 
 ### 登记与基础服务规则
 
@@ -42,21 +43,21 @@
 
 构建先校验显式 actor ID、文档和可处理源文件，再根据名称末段扩展名选择 `FileFormat`，并在创建版本前查找 parser 与 chunker。模式不由文件格式推断：两参数调用默认为 `ChunkingMode.FLAT`，第三参数可指定 `PARENT_CHILD`；缺少指定策略会失败，不自动降级。FLAT 输出中不允许有上下文父块，PARENT_CHILD 可为短内容返回无父组。
 
-`KnowledgeSourceReader` 将源流读至受控内存，校验记录大小、实际大小上限和原字节 SHA-256，生成可重复打开的 `PreparedSource`。资源流由调用者通过 try-with-resources 关闭。此步骤只准备和校验字节，不做 UTF-8 解码；未来文本 parser 必须自己执行严格 UTF-8 校验。当前没有生产 parser。
+`application.knowledge.indexing.source` 中的 `KnowledgeSourceReader` 将源流读至受控内存，校验记录大小、实际大小上限和原字节 SHA-256，生成可重复打开的 `PreparedSource`。资源流由调用者通过 try-with-resources 关闭。此步骤只准备和校验字节，不做 UTF-8 解码；未来文本 parser 必须自己执行严格 UTF-8 校验。当前没有生产 parser。
 
-`ParsedDocument` 与有序 `ContentBlock` 表达 parser 的结构化输出；内容类别、标题路径、边界和可靠来源位置是数据合同，不是已实现的格式解析算法。`ChunkDraft`、`ChunkGroupDraft` 与 `ChunkingOptions` 同样只是分块策略输入/输出合同。标题、Token 数、偏移和页码未知时保持 null，不伪造来源位置或估算精确 Token 数。
+`application.knowledge.indexing.parse` 中的 `ParsedDocument` 与有序 `ContentBlock` 表达 parser 的结构化输出；内容类别、标题路径、边界和可靠来源位置是数据合同，不是已实现的格式解析算法。`application.knowledge.indexing.chunk` 中的 `ChunkDraft`、`ChunkGroupDraft` 与 `ChunkingOptions` 同样只是分块策略输入/输出合同。`SourceLocation` 继续位于 `domain.knowledge.value`，位置规则由 `KnowledgeRules.requireLocation` 校验。标题、Token 数、偏移和页码未知时保持 null，不伪造来源位置或估算精确 Token 数。
 
 ### 组式保存与向量写入
 
-一个 `ChunkGroupDraft` 可包含一个无父 CONTEXT 和一个或多个 RETRIEVAL，也可只包含一个或多个 RETRIEVAL。组是数据库批次的最小单位：为满足批次目标而保存下一组会超出 `RAG_BATCH_SIZE` 时，先提交已有组；单组自身超过目标时整组独立保存，不拆父子关系。序号由构建入口按所有角色连续分配。
+一个 `ChunkGroupDraft` 可包含一个无父 CONTEXT 和一个或多个 RETRIEVAL，也可只包含一个或多个 RETRIEVAL。组是数据库批次的最小单位：为满足批次目标而保存下一组会超出 `RAG_BATCH_SIZE` 时，先提交已有组；单组自身超过目标时整组独立保存，不拆父子关系。`KnowledgeChunkGroupWriter.saveGroups` 在构建侧为整批组分配连续序号、角色和父序号，转换为现有 `SaveKnowledgeChunkCommand` 后一次调用 `KnowledgeChunkService.saveBatch`；不逐组调用、不拆父子组。
 
 `RAG_MAX_NUM_CHUNKS` 限制 CONTEXT 与 RETRIEVAL 的总片段数。`RAG_BATCH_SIZE` 对数据库是目标组批大小，不拆分组；向量批次则严格受该值约束，尾批可以更小。先提交片段，再为已保存的 RETRIEVAL 构造向量条目并写入；CONTEXT 不进入向量索引。
 
-已实现的 `SpringAiKnowledgeVectorIndex` 使用相同业务片段 UUID 作为 Spring AI Document ID（32 位 ID 转为标准连字符 UUID，不另造 ID），`knowledge_chunk_id` metadata 保留原业务 ID。metadata 包含知识库、文档、版本、文件、序号、来源名称/MIME、源 SHA-256、角色，以及存在时的父 ID。按 `revision_id` 精确过滤删除。适配器的单元测试使用 VectorStore 替身；不代表已验收真实 Embedding 或 Qdrant 服务。
+位于 `infrastructure.knowledge.indexing.vector` 的 Spring AI 向量适配使用相同业务片段 UUID 作为 Spring AI Document ID（32 位 ID 转为标准连字符 UUID，不另造 ID），`knowledge_chunk_id` metadata 保留原业务 ID。metadata 包含知识库、文档、版本、文件、序号、来源名称/MIME、源 SHA-256、角色，以及存在时的父 ID。按 `revision_id` 精确过滤删除。适配器的单元测试使用 VectorStore 替身；不代表已验收真实 Embedding 或 Qdrant 服务。
 
 ### 片段及父子关系
 
-`KnowledgeChunkService.saveBatch` 与 `saveGroups` 只接受 building 版本，使用 READ_COMMITTED 锁住目标版本，在单事务内校验关系、插入和更新实际片段总数。数据库异常回滚整批；同版本追加串行执行。基础批次输入以版本内全局序号引用父块；构建组由应用入口分配序号并转换为同一保存合同。
+基础 `KnowledgeChunkService.saveBatch` 只接受 building 版本，使用 READ_COMMITTED 锁住目标版本，在单事务内校验关系、插入和更新实际片段总数。数据库异常回滚整批；同版本追加串行执行。基础批次输入以版本内全局序号引用父块。构建组只由 `KnowledgeChunkGroupWriter` 转换：为整批组分配连续序号、角色及父序号，映射到现有 `SaveKnowledgeChunkCommand`，通过一次对 Spring 代理 `saveBatch` 的调用持久化；基础服务没有 `saveGroups`，不导入 indexing 合同。
 
 CONTEXT 必须无父；RETRIEVAL 可独立存在或引用同版本的无父 CONTEXT。父块和子块共同占用全局序号，父子正文分别保存；数据库 `chunk_count` 统计所有角色，不等于向量数量。只允许两层上下文关系，不表示完整章节树。具体切分算法和父块生成策略尚未实现。
 
@@ -82,11 +83,11 @@ RAG 配置变量和现有默认值见[配置说明](../reference/configuration.m
 
 | 学习内容 | 代码/测试 |
 | --- | --- |
-| 应用服务与构建编排 | [knowledge service](../../src/main/java/com/item/aisummary/application/knowledge/service/)；[KnowledgeIndexBuildServiceTest](../../src/test/java/com/item/aisummary/application/knowledge/service/KnowledgeIndexBuildServiceTest.java) |
-| 解析/分块合同与路由 | [processing](../../src/main/java/com/item/aisummary/application/knowledge/processing/)；[KnowledgeProcessingContractsTest](../../src/test/java/com/item/aisummary/application/knowledge/processing/KnowledgeProcessingContractsTest.java)、[KnowledgeProcessingRouterTest](../../src/test/java/com/item/aisummary/application/knowledge/processing/KnowledgeProcessingRouterTest.java)、[KnowledgeSourceReaderTest](../../src/test/java/com/item/aisummary/application/knowledge/processing/KnowledgeSourceReaderTest.java) |
-| 组式片段保存 | [KnowledgeChunkGroupsTest](../../src/test/java/com/item/aisummary/application/knowledge/service/KnowledgeChunkGroupsTest.java)、[KnowledgeChunkServiceTest](../../src/test/java/com/item/aisummary/application/knowledge/service/KnowledgeChunkServiceTest.java) |
-| 生命周期与 H2 持久化 | [KnowledgeBuildLifecycleServiceIntegrationTest](../../src/test/java/com/item/aisummary/application/knowledge/service/KnowledgeBuildLifecycleServiceIntegrationTest.java)、[KnowledgePersistenceTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/persistence/repository/KnowledgePersistenceTest.java) |
-| 向量适配器 | [SpringAiKnowledgeVectorIndex](../../src/main/java/com/item/aisummary/infrastructure/knowledge/ai/SpringAiKnowledgeVectorIndex.java)、[SpringAiKnowledgeVectorIndexTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/ai/SpringAiKnowledgeVectorIndexTest.java) |
-| 处理合同与配置参数 | [KnowledgeProcessingContractsTest](../../src/test/java/com/item/aisummary/application/knowledge/processing/KnowledgeProcessingContractsTest.java)、[KnowledgeRagConfigurationTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/config/KnowledgeRagConfigurationTest.java)、[KnowledgeRagPropertiesTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/config/KnowledgeRagPropertiesTest.java) |
+| 基础服务与构建编排 | [knowledge 基础 service](../../src/main/java/com/item/aisummary/application/knowledge/service/)、[indexing/build](../../src/main/java/com/item/aisummary/application/knowledge/indexing/build/)；[KnowledgeIndexBuildServiceTest](../../src/test/java/com/item/aisummary/application/knowledge/indexing/build/KnowledgeIndexBuildServiceTest.java)、[KnowledgeBuildLifecycleServiceIntegrationTest](../../src/test/java/com/item/aisummary/application/knowledge/indexing/build/KnowledgeBuildLifecycleServiceIntegrationTest.java)、[KnowledgeProcessingRouterTest](../../src/test/java/com/item/aisummary/application/knowledge/indexing/build/KnowledgeProcessingRouterTest.java) |
+| 源与解析合同 | [indexing/source](../../src/main/java/com/item/aisummary/application/knowledge/indexing/source/)、[indexing/parse](../../src/main/java/com/item/aisummary/application/knowledge/indexing/parse/)；[KnowledgeSourceReaderTest](../../src/test/java/com/item/aisummary/application/knowledge/indexing/source/KnowledgeSourceReaderTest.java)、[FileFormatTest](../../src/test/java/com/item/aisummary/application/knowledge/indexing/source/FileFormatTest.java)、[KnowledgeParseContractsTest](../../src/test/java/com/item/aisummary/application/knowledge/indexing/parse/KnowledgeParseContractsTest.java) |
+| 分块合同与组保存 | [indexing/chunk](../../src/main/java/com/item/aisummary/application/knowledge/indexing/chunk/)；[KnowledgeChunkerContractsTest](../../src/test/java/com/item/aisummary/application/knowledge/indexing/chunk/KnowledgeChunkerContractsTest.java)、[KnowledgeChunkGroupWriterTest](../../src/test/java/com/item/aisummary/application/knowledge/indexing/chunk/KnowledgeChunkGroupWriterTest.java)、[KnowledgeChunkServiceTest](../../src/test/java/com/item/aisummary/application/knowledge/service/KnowledgeChunkServiceTest.java) |
+| 领域位置规则与 H2 持久化 | [KnowledgeRulesTest](../../src/test/java/com/item/aisummary/domain/knowledge/rule/KnowledgeRulesTest.java)、[SourceLocationTest](../../src/test/java/com/item/aisummary/domain/knowledge/value/SourceLocationTest.java)、[KnowledgePersistenceTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/persistence/repository/KnowledgePersistenceTest.java) |
+| 向量适配器 | [infrastructure `indexing/vector`](../../src/main/java/com/item/aisummary/infrastructure/knowledge/indexing/vector/)；[SpringAiKnowledgeVectorIndexTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/indexing/vector/SpringAiKnowledgeVectorIndexTest.java) |
+| RAG 配置参数 | [infrastructure `indexing/config`](../../src/main/java/com/item/aisummary/infrastructure/knowledge/indexing/config/)；[KnowledgeRagConfigurationTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/indexing/config/KnowledgeRagConfigurationTest.java)、[KnowledgeRagPropertiesTest](../../src/test/java/com/item/aisummary/infrastructure/knowledge/indexing/config/KnowledgeRagPropertiesTest.java) |
 
 上述测试覆盖固定编排、局部持久化/适配合同和失败行为，不验证真实 parser/chunker、真实文本语义/切分质量、OpenAI/Qdrant 网络调用或生产 MySQL。完整普通测试与外部验收边界见[测试说明](../guides/testing.md)。
