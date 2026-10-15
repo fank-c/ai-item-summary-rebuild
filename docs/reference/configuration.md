@@ -2,7 +2,7 @@
 
 生产配置位于 [application.yml](../../src/main/resources/application.yml)，本地模板位于 [.env.example](../../.env.example)。模板覆盖当前全部运行变量，凭据默认留空。
 
-返回 [文档导航](../README.md)。创建本地配置与启动步骤见 [运行指南](../guides/getting-started.md)。
+返回 [文档导航](../README.md)。最短启动与测试步骤见 [项目 README](../../README.md)。
 
 ## 本地文件与优先级
 
@@ -60,7 +60,12 @@ SPRING_AI_MODEL_CHAT=none
 
 ## RAG 构建配置
 
-RAG 构建默认关闭，基础元数据与健康接口不需要模型或向量凭据。启用时除 `APP_KNOWLEDGE_RAG_ENABLED=true` 外，还要求 Embedding=`openai`、向量存储=`qdrant`，并在应用中注册至少一个生产解析策略与 FLAT 分块策略；缺少外部后端依赖或配套 Bean 缺失时仍拒绝启动。当前已通过 `KnowledgeParserConfiguration` 与 `KnowledgeChunkerConfiguration` 在 RAG 开启时分别注册 TXT/Markdown 生产解析器与 `TokenBudgetKnowledgeChunker`（FLAT 与 PARENT_CHILD 两种模式）。两解析器构造参数复用 `maxSourceSize`（绑定 `APP_FILE_MAX_SIZE`）；切分策略消费 `ChunkingOptions` 参数。解析与切分实现不代表真实外部服务已验收或生产端到端完成。
+RAG 构建默认关闭，基础元数据与健康接口不需要模型或向量凭据。启用时除 `APP_KNOWLEDGE_RAG_ENABLED=true` 外，还要求 Embedding=`openai`、向量存储=`qdrant`，并在应用中注册至少一个生产解析策略与 FLAT 分块策略；缺少外部后端依赖或配套 Bean 缺失时仍拒绝启动。
+
+解析器装配规则：
+
+- `APP_KNOWLEDGE_RAG_ENABLED=true` 时自动装配本地生产解析策略：纯文本（TXT）、Markdown 和 Office Word（DOCX，基于 Apache POI 5.4.1）。解析过程均为本地纯 Java 处理，无外部网络/模型调用，构造参数复用 `maxSourceSize`（绑定 `APP_FILE_MAX_SIZE`）。
+- 仅当 `APP_KNOWLEDGE_RAG_ENABLED=true` 且 `APP_KNOWLEDGE_DOCMIND_ENABLED=true` 时，装配基于阿里云文档智能的 PDF 云端解析策略 Bean（`AlibabaPdfKnowledgeDocumentParser` / `DocMindPdfParserClient`）。未显式启用时不会上传任何文件至云端；启用后上传 PDF 进行云端解析会消耗服务额度并可能产生费用，且启动时必须配置 AccessKey ID 与 Secret。
 
 变量通过主配置映射到 Spring AI 2.0.1 的 Embedding 与 Qdrant 属性。
 
@@ -90,7 +95,28 @@ RAG 构建默认关闭，基础元数据与健康接口不需要模型或向量�
 
 原始源文件大小上限复用 `APP_FILE_MAX_SIZE`，默认 20 MB，必须为正且小于 Integer.MAX_VALUE 字节。`KnowledgeSourceReader` 会将限量原字节预读到内存并校验大小和 SHA-256，不执行 UTF-8 解码；生产 TXT 与 Markdown 解析器委托 `Utf8TextDecoder` 负责严格 UTF-8 校验与换行符规整。
 
-两参数内部调用 `KnowledgeIndexBuildService.build(actorUserId,documentId)` 默认选择 FLAT；第三参数可显式指定 PARENT_CHILD。模式不对应环境变量，策略由应用注册；现在生产解析器已提供 TXT/Markdown 实现，切分策略已提供 `TokenBudgetKnowledgeChunker`（FLAT 与 PARENT_CHILD 模式）。固定编排将数据库片段按整组保存，组不会因达到 `RAG_BATCH_SIZE` 而拆开；向量只包括 RETRIEVAL 并使用精确批次上限。普通测试中解析器与切分器真实单测验证行为（无网络请求），编排与向量使用分块和 VectorStore 替身，以及 H2 下的本地构建集成测试覆盖链路，解析与切分实现不代表真实外部服务已验收或生产端到端完成。完整解析与切分规则、合同与失败边界见[知识库模块](../modules/knowledge.md)。
+切分模式由内部 `build` 调用的第三参数选择，不对应环境变量。两参数入口默认 FLAT。构建合同与失败边界见 [知识库模块](../modules/knowledge.md)。
+
+## 阿里云文档智能（Document Mind）
+
+PDF 解析基于阿里云文档智能的大模型文档解析服务（`docmind_api20220711:2.0.14`）结合 Apache PDFBox 3.0.5 本地前置校验实现。官方接口规范见 [阿里云文档智能大模型版本文档解析](https://help.aliyun.com/zh/document-mind/developer-reference/document-parsing-large-model-version)。
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `APP_KNOWLEDGE_DOCMIND_ENABLED` | `false` | 是否启用 PDF 云端解析；仅在 `APP_KNOWLEDGE_RAG_ENABLED=true` 时生效。启用后处理 PDF 会上传至云端并消耗服务额度/可能产生费用 |
+| `ALIYUN_DOCMIND_ACCESS_KEY_ID` | 空 | 启用时必填的阿里云 AccessKey ID |
+| `ALIYUN_DOCMIND_ACCESS_KEY_SECRET` | 空 | 启用时必填的阿里云 AccessKey Secret |
+| `ALIYUN_DOCMIND_ENDPOINT` | `docmind-api.cn-hangzhou.aliyuncs.com` | 文档智能服务接入点 |
+| `ALIYUN_DOCMIND_VLM_ENHANCEMENT` | `true` | 是否启用视觉大模型增强（VLM）；开启后可能增加单页解析费用与处理耗时 |
+| `ALIYUN_DOCMIND_FORMULA_ENHANCEMENT` | `false` | 是否启用公式识别增强 |
+| `ALIYUN_DOCMIND_WAIT_TIMEOUT` | `600s` | 提交、轮询与结果拉取共用的等待时限，范围 `1ms`～`1h`；不保证同步 SDK 硬实时取消 |
+| `ALIYUN_DOCMIND_POLL_INTERVAL` | `2s` | 云端解析任务状态轮询间隔，范围 `1ms`～`1min` |
+
+### 通信与调用约定
+
+- **云端上传**：启用后 PDF 将发送到阿里云进行 OCR 与版面分析；解析流程见 [知识库模块](../modules/knowledge.md#pdf-解析与云端网关)。
+- **重试与超时**：禁用 SDK 自动重试。单次 HTTP 连接超时最多 5 秒、读取最多 30 秒，并根据提交、轮询与结果拉取共用的剩余等待预算收缩。底层同步 SDK 无法保证硬实时取消或远程任务撤回；超时或应用进程重启不恢复云端任务，重新提交可能重复计费。
+- **前置本地防御**：在调用云端前，先通过 Apache PDFBox 3.0.5 进行本地预检，校验 PDF 容器完整性、拒绝加密文档，并限制页数不超过 2,000 页，避免无效或超大文件产生云端调用。
 
 ## 模拟身份
 
@@ -159,6 +185,6 @@ SDK 超时须为正整数毫秒，且不超过 `Integer.MAX_VALUE` 毫秒；不�
 | `USER_TEST_DB_USERNAME` | 无 | 具有测试库建表与 CRUD 权限的账户 |
 | `USER_TEST_DB_PASSWORD` | 空 | 本地提供 |
 
-设置方式、清理范围和验收边界见 [测试说明](../guides/testing.md#真实-mysql-用户验收)。
+通过进程环境变量提供这些值，再执行 `mvn -Pmysql-it verify`；只写入 `.env` 不生效。该 profile 在指定测试库执行正式 schema 和用户 HTTP CRUD，并在结束时清理本次创建的用户记录。它只覆盖用户模块，不代表知识库 MySQL 或外部模型、向量库、对象存储及云端解析已验收。
 
 普通测试使用 [测试配置](../../src/test/resources/application.yml)，不导入 `.env`，模型、Qdrant、RAG 构建及外部对象存储保持关闭。

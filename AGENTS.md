@@ -14,9 +14,9 @@
 - RAG（检索增强生成）：理解文档加载、切分、向量检索和生成回答的完整链路。
 - 其他 AI 能力：根据实际学习目标逐步扩展，不预先引入无关组件。
 
-每个功能都应说明学习目标、关键 Spring AI API、运行方式、输入输出和测试方式。优先保持实现简单、边界清晰，只有在功能确实需要时才引入数据库、向量数据库、鉴权或生产级治理能力。
+实现应优先通过清晰的代码合同和行为测试表达边界；只有在确有复用价值或用户明确需要时才补充项目说明。优先保持实现简单、边界清晰，只有在功能确实需要时才引入数据库、向量数据库、鉴权或生产级治理能力。
 
-当前阶段维护基础工程、用户、核心文件、知识库基础服务、TXT/Markdown 生产文档解析器、TokenBudgetKnowledgeChunker（FLAT 与 PARENT_CHILD 模式）和固定 RAG 构建骨架：用户资料 CRUD、BCrypt 密码摘要、跨模块用户存在性查询、模拟请求身份、公共错误处理，文件上传、下载签名、删除、内部内容读取，以及知识库四表、片段父子字段、策略 ports、源字节读取、组式保存、向量适配、构建生命周期与版本发布。当前已实现 TXT 和 Markdown 两种生产文档解析器以及 TokenBudgetKnowledgeChunker（FLAT 与 PARENT_CHILD 两模式）；RAG 默认关闭，显式开启但缺 OpenAI Embedding、Qdrant 等外部依赖或配套 Bean 时拒绝启动。解析器与分块器行为由单元测试真实调用覆盖（不调用网络），构建编排与本地发布行为由 KnowledgeChunkingBuildIntegrationTest（真实本地 parser/chunker、H2 Mapper/发布与文件/向量替身）等测试覆盖，真实 MySQL、OpenAI/Qdrant 外部调用及具体 PDF/DOCX 解析尚未验收。元数据使用 MySQL；文件存储可选 MinIO 或阿里云 OSS。真实登录、权限、账户启停、客户端直传、可用性框架、知识库 HTTP、具体 PDF/DOCX/OCR 解析、异步任务、检索和问答不在本阶段范围。新增其他基础设施或业务前，必须有明确的用户需求。
+当前阶段维护基础工程、用户、核心文件、知识库基础服务、本地 TXT/Markdown/DOCX 生产文档解析器、基于阿里云文档智能的可选 PDF 云端解析器、TokenBudgetKnowledgeChunker（FLAT 与 PARENT_CHILD 模式）和固定 RAG 构建骨架：用户资料 CRUD、BCrypt 密码摘要、跨模块用户存在性查询、模拟请求身份、公共错误处理，文件上传、下载签名、删除、内部内容读取，以及知识库四表、片段父子字段、策略 ports、源字节读取、组式保存、向量适配、构建生命周期与版本发布。RAG 默认关闭，显式开启但缺 OpenAI Embedding、Qdrant 等外部依赖或配套 Bean 时拒绝启动。本地解析器与切分器行为由单元测试真实调用覆盖，DocMind 网关由无网络 Mock 单测覆盖，构建编排与本地发布行为由 KnowledgeChunkingBuildIntegrationTest（真实本地 parser/chunker、H2 Mapper/发布与文件/云/向量替身）等测试覆盖；真实 MySQL、OpenAI/Qdrant 外部调用及真实云端 DocMind 尚未验收。元数据使用 MySQL；文件存储可选 MinIO 或阿里云 OSS。真实登录、权限、账户启停、客户端直传、可用性框架、知识库 HTTP、异步任务、检索和问答不在本阶段范围。新增其他基础设施或业务前，必须有明确的用户需求。
 
 ## 技术基线
 
@@ -71,7 +71,7 @@ src/main/java/com/item/aisummary/
     ├── knowledge/
     │   ├── config/    # 基础 KnowledgeConfiguration
     │   ├── persistence/ # 四表 MyBatis 持久化及类型处理
-    │   └── indexing/  # config（RAG 条件配置、KnowledgeParserConfiguration、KnowledgeChunkerConfiguration、Properties）、parse（TXT/MD 解析器及 Utf8TextDecoder）、chunk（TokenBudgetKnowledgeChunker、JTokkitTokenBudget、SourceMappedText、TokenRangeSplitter）、vector（Spring AI 适配）
+    │   └── indexing/  # config（RAG 条件配置、KnowledgeParserConfiguration、KnowledgeChunkerConfiguration、DocMindParserConfiguration、Properties）、parse（TXT/MD/DOCX 解析器、DocMind PDF 适配及 Utf8TextDecoder）、chunk（TokenBudgetKnowledgeChunker、JTokkitTokenBudget、SourceMappedText、TokenRangeSplitter）、vector（Spring AI 适配）
     ├── persistence/   # 共享 UTC typehandler
     ├── time/          # 共享 UTC Clock 装配
     ├── security/      # BCrypt 摘要适配
@@ -183,7 +183,7 @@ src/main/resources/
 
 - 当前使用 `spring-ai-starter-model-openai`、`spring-ai-markdown-document-reader` 和 `spring-ai-starter-vector-store-qdrant`，版本均由现有 2.0.1 BOM 管理。直接声明 `org.commonmark:commonmark` 和 `org.commonmark:commonmark-ext-gfm-tables:0.22.0`（与 Spring AI 2.0.1 传递 core 对齐）；保留已有 `spring-ai-markdown-document-reader` 依赖但不用其 reader（因需保留原文及源位置，reader 提取和拼接文本不保留完整原语法与精确位置）；直接声明 `com.knuddels:jtokkit:1.1.0`（原 Spring AI 2.0.1 传递依赖版本，但 Spring AI BOM 不直接管理，显式固定用于本地 CL100K_BASE 预算分词）。
 - 用例通过应用层定义的外部能力接口调用 AI，例如摘要功能使用 `SummaryGenerator`。基础设施适配依赖 Spring AI 抽象接口，供应商特有实现封装在该边界内；应用层和领域层不直接依赖 `ChatModel`、`ChatClient` 或供应商 SDK。
-- 默认保持 `spring.ai.model.chat=none`、`spring.ai.model.embedding=none`、`spring.ai.vectorstore.type=none` 和 RAG 构建关闭，使没有 API Key 或 Qdrant 的环境可以启动和测试。构建开启时要求注册 parser 与 FLAT chunker，并显式选择 OpenAI Embedding 与 Qdrant，缺少外部后端依赖或配套 Bean 时仍拒绝启动；关闭时不装配 `KnowledgeIndexBuildService`，基础服务和健康检查仍可用。当前已提供 TXT/Markdown 生产 parser 与 TokenBudgetKnowledgeChunker（FLAT 与 PARENT_CHILD 模式），但不代表真实外部服务已验收或生产端到端完成。
+- 默认保持 `spring.ai.model.chat=none`、`spring.ai.model.embedding=none`、`spring.ai.vectorstore.type=none` 和 RAG 构建关闭，使没有 API Key 或 Qdrant 的环境可以启动和测试。构建开启时要求注册 parser 与 FLAT chunker，并显式选择 OpenAI Embedding 与 Qdrant，缺少外部后端依赖或配套 Bean 时仍拒绝启动；关闭时不装配 `KnowledgeIndexBuildService`，基础服务和健康检查仍可用。当前已提供 TXT/Markdown/DOCX 本地生产 parser、可选的阿里云文档智能 PDF parser 与 TokenBudgetKnowledgeChunker（FLAT 与 PARENT_CHILD 模式），但不代表真实外部服务已验收或生产端到端完成。
 - 需要启用 OpenAI 时使用环境变量：
 
 ```text
@@ -203,10 +203,10 @@ OPENAI_MODEL=<model-name>
 - 主配置使用 `spring.config.import=optional:file:./.env[.properties][encoding=utf-8]`，从进程工作目录读取 `.env`；缺少文件不报错。Maven、IDE 和 JAR 启动均应明确工作目录，通常使用项目根目录。
 - `.env` 使用 UTF-8 Java Properties 格式：`KEY=value`，不写 `export`、不包引号，注释单独占一行；反斜杠用 `\\` 转义，Spring 仍解析 `${...}`。不把它当作 Shell 脚本执行。
 - 在上述配置方式下，应用命令行参数优先于进程环境变量，进程环境变量优先于 `.env`，未定义的变量使用主配置默认值。导入不修改操作系统环境或 `System.getenv()`。
-- 新增环境变量或修改默认值时，必须同时更新 `.env.example`、README 和本文件；模板覆盖所有运行变量，仅保留安全默认值和空凭据。`USER_TEST_DB_*` 在模板中只作为注释参考，验收仍通过进程环境变量配置。
+- 新增环境变量或修改默认值时，必须同步更新 `.env.example` 和本文件；模板覆盖所有运行变量，仅保留安全默认值和空凭据。`USER_TEST_DB_*` 在模板中只作为注释参考，验收仍通过进程环境变量配置。
 - 创建本地 `.env` 前检查是否存在；同步时保留已有值，只补缺少的键，不输出本地凭据。不提交 `.env`、其他 `.env.*`、本地 IDE 配置和 `target/` 生成物；`.gitignore` 只为 `.env.example` 设置例外。
 - 普通测试的 `src/test/resources/application.yml` 不导入 `.env`，继续使用 H2 并关闭模型及外部存储；配置加载测试只能使用临时目录、隔离子进程和虚构值。
-- 修改端口、模型开关或启动方式后，必须同步更新 README。
+- 仅在端口或启动方式变化影响 README 中的最短启动与健康检查步骤时更新 README。
 
 ## 用户模块约定
 
@@ -285,7 +285,7 @@ SDK 超时要求正整数毫秒且不超过 Integer.MAX_VALUE 毫秒；不保证
 
 ## 知识库基础服务与表结构约定
 
-- 已实现知识库四表领域、MyBatis 持久化、内部基础服务和固定 RAG 构建骨架，包括策略 ports、原字节读取、组式片段保存、向量适配与版本发布。当前已提供 TXT/Markdown 生产解析器与 TokenBudgetKnowledgeChunker（FLAT 与 PARENT_CHILD 两模式）；RAG 默认关闭，开启但缺 OpenAI Embedding、Qdrant 等外部依赖或配套 Bean 时仍拒绝启动。字段见 `docs/reference/database/knowledge.md`，调用见 `docs/modules/knowledge.md`。没有知识库 HTTP、权限、删除、异步任务、实际 PDF/DOCX/OCR 解析、检索或聊天。
+- 已实现知识库四表领域、MyBatis 持久化、内部基础服务和固定 RAG 构建骨架，包括策略 ports、原字节读取、组式片段保存、向量适配与版本发布。当前已提供本地 TXT、Markdown 和 DOCX（Apache POI 5.4.1）生产文档解析器，以及基于阿里云文档智能（`docmind_api20220711:2.0.14` + Apache PDFBox 3.0.5 校验容器）的可选 PDF 云端解析器，与 TokenBudgetKnowledgeChunker（FLAT 与 PARENT_CHILD 两模式）；所有解析器输出统一的 `ParsedDocument`，无 schema 变更。RAG 默认关闭，开启但缺 OpenAI Embedding、Qdrant 等外部依赖或配套 Bean 时仍拒绝启动。内部调用与数据合同由源码和行为测试表达。没有知识库 HTTP、权限、删除、异步任务、检索或聊天。
 - 服务按用例组织，无 Service/Impl 套层。`KnowledgeBaseService` 创建、详情、列表和改名；名称 trim 后非空白且最多 100 个 Java 字符，允许多库同名。业务 ID 为 32 位 UUID，时钟复用现有 Clock 并截断到微秒。
 - `KnowledgeDocumentService.register(actorUserId,knowledgeBaseId,fileId)` 先校验显式身份及库存在，再通过 `FileContentService.requireOwnedProcessable` 校验源文件。只查询元数据；不得读取正文、调用文件 Mapper 或将文件归属视为知识库授权。新文档 status=1、index_status=pending，活动版本和失败摘要为空。
 - 重复库内文件登记报 `DOCUMENT_ALREADY_REGISTERED`，数据库唯一索引兜底。`KnowledgeRevisionService.create(documentId)` 先确认文档存在，使用 MAX + 1 创建 building 版本；竞争报 `REVISION_NUMBER_CONFLICT`，达到 int 上限报 `REVISION_NUMBER_EXHAUSTED`，不自动重试。新版本 chunk_count=0，created_at/started_at 为进入 building 的时间，摘要、失败信息和其他生命周期时间为空，不修改文档活动版本。
@@ -306,8 +306,11 @@ SDK 超时要求正整数毫秒且不超过 Integer.MAX_VALUE 毫秒；不保证
 
 ### RAG 固定构建骨架约定
 
-- `KnowledgeIndexBuildService.build(actorUserId,documentId)` 是内部构建入口。两参数形式默认选择 `ChunkingMode.FLAT`；第三参数可显式指定 `FLAT` 或 `PARENT_CHILD`。模式只选择已注册的 `KnowledgeChunker`。解析和切分分别由 `KnowledgeDocumentParser`、`KnowledgeChunker` 应用合同提供；当前已实现 TXT 和 Markdown 两种生产解析器以及 TokenBudgetKnowledgeChunker（FLAT 与 PARENT_CHILD 两种生产分块策略）。不得添加空操作或假装可用的默认策略。
-- 默认 `APP_KNOWLEDGE_RAG_ENABLED=false`。显式开启时要求已注册至少一个解析器、`FLAT` 分块器、OpenAI Embedding 与 Qdrant 适配器；缺少外部后端依赖或配套 Bean 仍拒绝启动。`KnowledgeParserConfiguration` 与 `KnowledgeChunkerConfiguration` 在 RAG 开启时分别注册生产解析器与分块器（FLAT 与 PARENT_CHILD），与 `KnowledgeRagConfiguration` 依赖检查分离；`KnowledgeRagConfiguration` 继续在缺少外部 OpenAI Embedding 或 Qdrant 时拒绝启动。两解析器构造参数 `constructor(long maxSourceSize)` 复用现有 `KnowledgeRagProperties.maxSourceSize`（绑定 `APP_FILE_MAX_SIZE`）。切分策略在构造时不依赖具体属性，在执行 `chunk` 时消费 `ChunkingOptions`。切分与解析实现不代表真实外部服务已验收或生产端到端完成。`FileFormat` 声明 TXT/MD/PDF/DOCX 路由类型，当前已实现 TXT 和 MD 生产解析器，PDF/DOCX 解析仍未实现。
+- `KnowledgeIndexBuildService.build(actorUserId,documentId)` 是内部构建入口。两参数形式默认选择 `ChunkingMode.FLAT`；第三参数可显式指定 `FLAT` 或 `PARENT_CHILD`。模式只选择已注册的 `KnowledgeChunker`。解析和切分分别由 `KnowledgeDocumentParser`、`KnowledgeChunker` 应用合同提供；当前已实现本地 TXT、Markdown 和 DOCX（Apache POI 5.4.1）生产解析器，基于阿里云文档智能（`docmind_api20220711:2.0.14`，配合 PDFBox 3.0.5 校验容器）的可选 PDF 云端解析器，以及 TokenBudgetKnowledgeChunker（FLAT 与 PARENT_CHILD 两种生产分块策略）。不得添加空操作或假装可用的默认策略。
+- 默认 `APP_KNOWLEDGE_RAG_ENABLED=false`。显式开启时要求已注册至少一个解析器、`FLAT` 分块器、OpenAI Embedding 与 Qdrant 适配器；缺少外部后端依赖或配套 Bean 仍拒绝启动。装配规则：
+  - `KnowledgeParserConfiguration` 与 `KnowledgeChunkerConfiguration` 在 RAG 开启时分别注册 TXT/Markdown/DOCX 本地生产解析器与分块器（FLAT 与 PARENT_CHILD）；本地解析器均为纯 Java 内存处理，无外部网络或模型调用，构造参数复用 `KnowledgeRagProperties.maxSourceSize`（绑定 `APP_FILE_MAX_SIZE`）。
+  - `DocMindParserConfiguration` 仅在 `APP_KNOWLEDGE_RAG_ENABLED=true` 且 `APP_KNOWLEDGE_DOCMIND_ENABLED=true` 时注册 PDF 云端解析策略 Bean（`AlibabaPdfKnowledgeDocumentParser` / `DocMindPdfParserClient`）。未显式启用时不会向外上传文件；启用后 PDF 将发送至阿里云文档智能，消耗服务额度并可能产生费用，且启动时必须配置 AccessKey ID 与 Secret。
+  - `KnowledgeRagConfiguration` 依赖检查分离管理，继续在缺少外部 OpenAI Embedding 或 Qdrant 时拒绝启动。切分策略在构造时不依赖具体属性，在执行 `chunk` 时消费 `ChunkingOptions`。切分与解析实现不代表真实外部服务已验收或生产端到端完成。`FileFormat` 声明 TXT/MD/PDF/DOCX 路由类型，全部格式均已有生产解析策略实现（PDF 需显式启用云解析）。
 - 切分策略（TokenBudgetKnowledgeChunker）实现规则：
   - FLAT 与 PARENT_CHILD 共用区间切分内核，不依赖源文件格式。
   - Token 计数基于本地 JTokkit 1.1.0（CL100K_BASE 编码），special token 字面量按普通文本处理，不调用网络。
@@ -322,11 +325,13 @@ SDK 超时要求正整数毫秒且不超过 Integer.MAX_VALUE 毫秒；不保证
 - 显式身份、文档、文件归属/状态、文件名末段扩展名和相应策略在创建版本前检查。文件归属不代表知识库权限。构建开始通过 READ_COMMITTED 短事务锁文档，拒绝任何已有 building，返回 `BUILD_ALREADY_RUNNING`。MAX+1、状态与计数沿用现有四表，不自动重试，不新增状态字段或 published 枚举。进程中断的 building 恢复尚未实现。
 - 构建使用 `Propagation.NEVER` 拒绝外层数据库事务。生命周期入口以 READ_COMMITTED 短事务锁文档，MAX+1 创建版本；发布前校验活动快照、归属、全部片段真实总数和 RETRIEVAL 数，事务内完成 ready、源摘要、时间、文档活动指针/indexed 与旧版本 superseded。文件读取、策略执行和向量调用均不在数据库事务中。
 - `application.knowledge.indexing` 按 `build / source / parse / chunk / vector` 聚合 RAG 专用合同与流程；各组内部直接放置相关类，不再增加 `service / port / model` 子包。`build` 包含 `KnowledgeIndexBuildService`、`KnowledgeBuildLifecycleService`、`KnowledgeProcessingRouter`、`KnowledgeBuildContext`、`KnowledgeBuildResult`、`KnowledgeBuildStage`、`KnowledgeBuildException`；`source` 包含 `KnowledgeSourceReader`、`PreparedSource`、`FileFormat`、`KnowledgeSourceException`；`parse` 包含 `KnowledgeDocumentParser`、`ParsedDocument`、`ContentBlock`、`ContentBlockType`；`chunk` 包含 `KnowledgeChunker`、`ChunkingMode`、`ChunkingOptions`、`ChunkDraft`、`ChunkGroupDraft`、`KnowledgeChunkGroupWriter`；`vector` 包含 `KnowledgeVectorIndex`、`KnowledgeVectorEntry`。四个基础 service、`SaveKnowledgeChunkCommand` 和四个基础仓储 port 保持原位与职责边界。
-- `KnowledgeSourceReader` 预读原文件字节至受控内存，校验记录大小、实际大小上限和 SHA-256，产出可重复打开的 `PreparedSource`。源流仍由调用者关闭。该步骤不做 UTF-8 解码；由基础设施层 `TextKnowledgeDocumentParser` 与 `MarkdownKnowledgeDocumentParser` 委托 package-private `Utf8TextDecoder` 负责严格 UTF-8 校验与换行规整。`KnowledgeDocumentParser` 接口保持不变。
-- TXT 与 Markdown 解析规则及安全预算：
+- `KnowledgeSourceReader` 预读原文件字节至受控内存，校验记录大小、实际大小上限和 SHA-256，产出可重复打开的 `PreparedSource`。源流仍由调用者关闭。该步骤不做 UTF-8 解码；由基础设施层文本解析器通过 `Utf8TextDecoder` 负责严格 UTF-8 校验与换行规整，DOCX 解析器执行 ZIP 预算与 StAX 预检，PDF 解析器通过 PDFBox 本地校验容器并委托阿里云文档智能进行 OCR 与版面分析。`KnowledgeDocumentParser` 接口保持不变，输出统一 `ParsedDocument`。
+- 文档解析规则及安全预算：
   - TXT 规则：严格 UTF-8 解码（REPORT 模式，不猜测编码），拒绝 NUL 字符；增量解码内存流避免再次复制完整原字节，开头至多去除 1 个 BOM；CRLF、CR 统一规整为 LF；连续空白行（含普通空白及 NBSP 等 `Character.isSpaceChar`）切分自然段，段内保留换行与空格缩进、不执行 trim；全部内容块类别为 TEXT，标题路径与页码为 null，无硬边界；来源位置偏移为规整后全文的 UTF-16 substring 半开区间 `[start_offset, end_offset)`；全空白文档解析失败。
   - Markdown 规则：基于 CommonMark 与 GFM 表格扩展，只识别顶层块（top-level blocks）并保留原 text；HEADING 块保留 `#` 或 Setext 原文，标题路径提取标题名去结构符号但保留 inline 语法，标题每次构成硬边界；合法空标题保留为 TEXT，移除该级及更深路径但不虚构标题名；水平线不输出但下一 block 标记硬边界；CODE 块包含围栏/缩进完整保留；TABLE 块保留完整表格；列表与引用整个作为单个 TEXT 块，不递归重复输出嵌套段落，不用嵌套标题污染外层 headingPath；HTML/图片/公式等保留原文不执行下载或 OCR；reference 定义保留为 TEXT；不完整 md 按 CommonMark 规范容错解释；全空白或仅水平线解析失败；TXT/MD 当前输出 source 均为可靠 UTF-16 偏移；Markdown 使用 block 级 node spans 换算为全文行起始的 UTF-16 substring 半开区间 `[start_offset, end_offset)` 截取原文，不使用 renderer 回写；若 node 无 spans（`spans.isEmpty()` 或行索引越界）则明确解析失败抛出异常，不估算位置（应用 port 允许其他格式位置为 null）；未知页码为 null；行内 AST 采用轻量 parser 留 literal TEXT 避免大量 inline AST，语法留正文。
-  - 固定安全预算与防御边界（硬编码常量，不加变量）：两解析器最大 100,000 输出 blocks；Markdown 最大 1,000,000 行、容器嵌套保护阈值 128。固定 guards（100k blocks、1M lines、嵌套深度 128）为硬编码解析防御限制，不是安全保证（不作为恶意 DoS 防护承诺）；超限明确拒绝，不截断内容。这些是解析预算，不是 RAG_MAX_NUM_CHUNKS 的切片限制，不保证所有输入在任意堆大小下可解析。
+  - DOCX 规则：基于 Apache POI 5.4.1，仅支持 `.docx`。严格保留顶层段落与表格的交错阅读顺序（`document.getBodyElements()`）；合并 runs 提取正文并统一换行为 LF（`\n`）；超链接仅提取显示文本，不访问外部网络资源；大纲判定优先采用段落显式 outline 0..8 映射 1..9 级标题，显式 9 为正文阻断回退，未显式声明时沿 basedOn 样式链回溯已知 Heading 1..9 或大纲级别（最大样式深度 32，检测循环继承）；不以字体字号推断标题；标题块 boundaryBefore=true，headingPath 快照不可变；表格列按 Tab（`\t`）分隔、行按 LF（`\n`）分隔，空单元格保留，单元格内段落按 LF 连接；嵌套表格及不支持的正文容器明确拒绝，不声称任意 Word 文档完整支持；页眉/页脚/批注/脚注/尾注不提取，不做图片 OCR，Word 页码为 null；以 `\n\n` 拼接全部块计算 UTF-16 半开区间 `[start_offset, end_offset)`；POI 实例化前通过 `DocxPreflightChecker` 预检 ZIP 预算（1000 entries、单条目 50MiB、累计 100MiB、解压比 100:1、ZipSlip 防护、拒绝 XML DTD/XXE）与 StAX 结构深度/数量/字符防御（嵌套深度 128、100k blocks、50M chars）；预算为深度防御，不是完整 DoS 保证。
+  - PDF 规则与云端网关：基于阿里云文档智能（`docmind_api20220711:2.0.14`）结合 Apache PDFBox 3.0.5。PDFBox 仅在本地用于验证 PDF 容器完整性、拒绝加密/损坏文件并限制页数不超过 2,000 页（`MAX_PAGES`），不提取文本；页面文本提取、扫描件 OCR 与版面分析委托阿里云文档智能（支持教材、说明书等常规扫描 PDF，当前不要求手写识别，参考 `https://help.aliyun.com/zh/document-mind/developer-reference/document-parsing-large-model-version`）。版面严格按 `layout.index` 升序排序（非负唯一，阅读顺序）；DocMind 官方 0 基 `pageNum` 映射为应用 1 基 `pageNum + 1`；严格比对 `pageImage` 影像清单覆盖全部本地页数，接受严格完整的 0 基或 1 基页码清单，缺页、空版面或未识别重要内容拒绝构建（全空白 PDF 失败，允许页清单中有空白页无 layout）；DocMind `layout.level` 仅表示版面嵌套深度，不能作为可信文档标题层级，故不伪造 Heading 1，`headingPath = null`；表格保留 Markdown 或 HTML 原文而不丢失合并信息；图示包含 `llmResult` 时保留说明，无法识别的图示/公式明确失败；容量防御上限为 2000 页、100k 版面、50M 字符。云客户端通过 `SubmitDocParserJobAdvanceRequest` 提交、轮询状态并在成功后分页拉取（步长 100）；禁用 SDK 自动重试（`setAutoretry(false)`），单次连接最多 5s、读取最多 30s，并随剩余等待预算收缩；以 `ALIYUN_DOCMIND_WAIT_TIMEOUT`（默认 600s，范围 1ms..1h）计算提交、轮询和结果拉取共用的截止时间；底层同步 SDK 无法保证硬实时取消或远程任务撤回，超时或进程重启不恢复任务且可能重复计费；`ALIYUN_DOCMIND_VLM_ENHANCEMENT` 默认 true（可能增加单页费用/耗时），公式增强默认 false。
+  - 固定安全预算与防御边界（硬编码常量，不加变量）：输出内容块最大 100,000；Markdown 最大 1,000,000 行、容器嵌套深度 128；DOCX/PDF 文本提取最大 50,000,000 字符。固定 guards 为硬编码解析防御限制，不是安全保证（不作为恶意 DoS 防护承诺）；超限明确拒绝，不截断内容。这些是解析预算，不是 RAG_MAX_NUM_CHUNKS 的切片限制，不保证所有输入在任意堆大小下可解析。
 - `ParsedDocument`、`ContentBlock`、`ChunkDraft` 与 `ChunkGroupDraft` 是固定数据合同。每组可含一个无父 CONTEXT 和非空 RETRIEVAL 列表，也可只含 RETRIEVAL；FLAT 不允许输出父块，PARENT_CHILD 可返回无父短内容组。组作为数据库批次单位，不拆开父子关系。`RAG_CHUNK_SIZE`、`RAG_PARENT_CHUNK_SIZE`、`RAG_CHUNK_OVERLAP` 等选项由 `KnowledgeRagProperties` 绑定并构造 `ChunkingOptions` 传给切分策略。
 - 构建按组分配连续全局序号、角色和父序号；`KnowledgeChunkGroupWriter.saveGroups` 将整批组转换为现有 `SaveKnowledgeChunkCommand`，并一次调用通过 Spring 注入的 `KnowledgeChunkService.saveBatch` 代理。writer 不声明事务；实际事务由基础服务的代理入口提供。`RAG_MAX_NUM_CHUNKS` 统计 CONTEXT 与 RETRIEVAL 总数。`RAG_BATCH_SIZE` 是数据库分组保存的目标大小，过大的单组独立保存、不拆组；向量只包含已保存 RETRIEVAL，并严格按配置大小成批写入（末批可不足）。片段保存先于向量写入。未知标题、Token 数、偏移和页码保持为空。
 - 已实现的 Spring AI 向量适配器将已保存 RETRIEVAL 映射为 Document，沿用业务 UUID（为 32 位值补标准连字符），保留原始 `knowledge_chunk_id`，写入来源与父引用 metadata，并按 `revision_id` 精确过滤删除。适配器存在不表示已验收外部 Embedding/Qdrant 调用。
@@ -353,6 +358,13 @@ SDK 超时要求正整数毫秒且不超过 Integer.MAX_VALUE 毫秒；不保证
 | `RAG_MIN_CHUNK_LENGTH_TO_EMBED` | 0，当前只允许 0，作为策略选项 |
 | `RAG_MAX_NUM_CHUNKS`、`RAG_KEEP_SEPARATOR` | 100000 正整数（全部角色总数）、true（传给策略，false 仅普通文本 CR/LF 等长替换为空格） |
 | `RAG_PUNCTUATION_MARKS` | `.?!;。？！；` 与换行，非空策略选项；Properties 的 `\n` 表示换行 |
+| `APP_KNOWLEDGE_DOCMIND_ENABLED` | false；启用才装配 PDF 云端解析策略并上传云端（消耗额度/可能产生费用） |
+| `ALIYUN_DOCMIND_ACCESS_KEY_ID`、`ALIYUN_DOCMIND_ACCESS_KEY_SECRET` | 空，启用时必填，本地提供 |
+| `ALIYUN_DOCMIND_ENDPOINT` | docmind-api.cn-hangzhou.aliyuncs.com |
+| `ALIYUN_DOCMIND_VLM_ENHANCEMENT` | true（启用云解析时默认开启视觉大模型增强，可能增加单页解析费用/耗时） |
+| `ALIYUN_DOCMIND_FORMULA_ENHANCEMENT` | false（公式增强默认关闭） |
+| `ALIYUN_DOCMIND_WAIT_TIMEOUT` | 600s，范围 1ms～1h；云端解析任务最大等待时限，用于 deadline 计算 |
+| `ALIYUN_DOCMIND_POLL_INTERVAL` | 2s，范围 1ms～1min；云端解析状态轮询间隔 |
 
 源大小复用 `APP_FILE_MAX_SIZE`，正且小于 Integer.MAX_VALUE 字节；源读取器预读原字节到内存，增加上限前重新评估内存占用。RAG 参数供当前切分策略消费且不写历史版本；更换模型、维度、集合或策略时另行评估兼容性与重建。
 
@@ -374,38 +386,17 @@ mvn clean verify
 
 不能访问外部服务或缺少必要凭据时，说明验证边界，不要伪造成功结果。
 
-用户行为测试覆盖 HTTP、摘要、服务失败、真实 Mapper SQL、引用切换和请求身份。文件测试覆盖 H2 真 Mapper 生命周期、所有权和状态、实际流大小、摘要、关闭资源、SDK 边界、条件装配及真实容器 multipart 限制。普通测试强制关闭模型，使用 H2 和存储替身，不依赖本机 MySQL、Docker、外部对象存储或个人凭据。
+用户行为测试覆盖 HTTP、摘要、服务失败、真实 Mapper SQL、引用切换和请求身份。文件测试覆盖 H2 真 Mapper 生命周期、所有权和状态、实际流大小、摘要、关闭资源、SDK 边界、条件装配、旧 Key 下载/读取/删除透传、新 Key 的总长度/总字节/单段预算，以及真实容器单文件/请求/part 头部限制。`FileLongFilenameMultipartHttpTest` 加载生产配置、以测试 YAML 覆盖外部后端并禁用 `.env` 导入，验证 ASCII/中文/补充平面长名称完整保留、非法名称 400 与头部超限 413；`AiItemSummaryEnvironmentTest` 验证 4KB 默认值和各配置来源覆盖。普通测试强制关闭模型，使用 H2 和存储替身，不依赖本机 MySQL、Docker、外部对象存储或个人凭据。
 
-知识库测试覆盖四表 H2 真 Mapper 和字段、同名多库、文件元数据归属、版本号递增及竞争冲突、标题 JSON 和可空位置、UTC 微秒，以及普通块兼容、两种角色及父引用往返、同批和已存父块解析、非法关系拒绝、片段排序、全部角色计数和事务失败回滚。生产解析器通过 `TextKnowledgeDocumentParserTest`、`MarkdownKnowledgeDocumentParserTest`、`Utf8TextDecoderTest` 与 `KnowledgeParserConfigurationTest` 单测真实调用覆盖（不调用网络），验证严格 UTF-8、换行规整、顶层块提取、标题路径与硬边界、安全预算及条件装配。生产切分器通过 `TokenBudgetKnowledgeChunkerTest` 真实单元测试覆盖 Token 预算、段落/句子/标点/空白回退、Unicode 代理对保护、短尾保留、重叠正进度、父子无重复、keepSeparator 语义与超限失败；配置绑定与策略装配由 `KnowledgeRagPropertiesTest`、`KnowledgeChunkerConfigurationTest` 和 `ChunkingOptionsTest` 覆盖。真实本地 parser/chunker、H2 Mapper/发布与文件/向量替身由 `KnowledgeChunkingBuildIntegrationTest` 覆盖完整构建链路；`KnowledgeTextParsingBuildIntegrationTest` 覆盖真实 parser 产出入库与发布流转。RAG 构建编排同时保留替身测试覆盖路由、原字节大小与摘要/流关闭、组式保存、数据库与向量独立批次、仅 RETRIEVAL 向量化、building 互斥、发布回滚、首次失败与重建失败、当前和旧版本清理事实、开关及依赖检查。Spring AI 向量适配测试使用 VectorStore 替身；不声称真实模型完整入库，不访问外部模型或 Qdrant。事务测试不使用测试外层事务；普通测试使用隔离 H2，不描述为真实 MySQL 或外部服务验收。
+知识库测试覆盖四表 H2 真 Mapper 和字段、同名多库、文件元数据归属、版本号递增及竞争冲突、标题 JSON 和可空位置、UTC 微秒，以及普通块兼容、两种角色及父引用往返、同批和已存父块解析、非法关系拒绝、片段排序、全部角色计数和事务失败回滚。生产解析器通过 `TextKnowledgeDocumentParserTest`、`MarkdownKnowledgeDocumentParserTest`、`DocxKnowledgeDocumentParserTest`、`Utf8TextDecoderTest`、`KnowledgeParserConfigurationTest`、`DocMindParserConfigurationTest`、`AlibabaPdfKnowledgeDocumentParserTest` 与 `DocMindPdfParserClientTest` 单测覆盖（本地无网络调用，云端网关使用 Mock），验证严格 UTF-8、换行规整、顶层块提取、标题路径与硬边界、安全预算、DOCX 交错元素与前置防御、PDFBox 本地容器校验、DocMind 响应映射及条件装配。生产切分器通过 `TokenBudgetKnowledgeChunkerTest` 真实单元测试覆盖 Token 预算、段落/句子/标点/空白回退、Unicode 代理对保护、短尾保留、重叠正进度、父子无重复、keepSeparator 语义与超限失败；配置绑定与策略装配由 `KnowledgeRagPropertiesTest`、`KnowledgeChunkerConfigurationTest` 和 `ChunkingOptionsTest` 覆盖。真实本地 parser（含 DOCX 与 PDFBox 本地校验）/chunker、H2 Mapper/发布与云/文件/向量替身由 `KnowledgeChunkingBuildIntegrationTest` 覆盖完整构建链路（覆盖 FLAT 与 PARENT_CHILD 两模式及失败旧版保护）；`KnowledgeTextParsingBuildIntegrationTest` 覆盖真实 parser 产出入库与发布流转。RAG 构建编排同时保留替身测试覆盖路由、原字节大小与摘要/流关闭、组式保存、数据库与向量独立批次、仅 RETRIEVAL 向量化、building 互斥、发布回滚、首次失败与重建失败、当前和旧版本清理事实、开关及依赖检查。Spring AI 向量适配测试使用 VectorStore 替身；不声称真实模型完整入库，不访问外部模型或 Qdrant，不执行真实云端上传或付费调用。事务测试不使用测试外层事务；普通测试使用隔离 H2，不描述为真实 MySQL、外部服务或云端真实 DocMind 验收。
 
 显式真实 MySQL 验收：先通过进程环境变量配置上表中的 `USER_TEST_DB_*`（仅写入 `.env` 不会生效），再运行 `mvn -Pmysql-it verify`。该 profile 执行正式 schema 和完整 HTTP CRUD，仅清理本次创建的测试记录。H2 验证不能被描述为 MySQL 验证。实际启动验证仍应请求 `GET /api/health`。
 
-## 文档同步
+## 项目说明维护
 
-现行文档按用途维护，只保留当前有效的使用方式、实现说明和参考资料：
+`README.md` 仅保留项目定位、最短启动与测试命令及必要入口。公开 HTTP API 集中维护在 `docs/reference/api.md`，仅在接口路径、方法、参数、响应或错误合同变化时更新相关内容，不再拆分多篇。模块说明位于 `docs/modules/`，工程结构与配置参考位于 `docs/reference/`，按任务需要查阅，仅在职责、关键业务规则、设计边界或配置语义变化时更新相关段落；无需每次修改全部文档。文档结构变化时修正文档导航及相关链接。实现细节以生产源码、配置、SQL 和可观察行为测试为准，不重复维护类与测试清单、操作指南或表字段说明。只有用户明确要求或确有复用价值时才新增文档。
 
-- `README.md`：项目定位、最短启动步骤与入口，不堆积详细变量表和历史执行结果。
-- `docs/README.md`：文档导航与阅读顺序；新增或移动文档时同步更新并检查相对链接、页内锚点。
-- `docs/guides/getting-started.md`、`docs/guides/testing.md`：运行步骤、测试命令及验证边界。
-- `docs/architecture.md`、`docs/modules/user.md`、`docs/modules/file.md`、`docs/modules/knowledge.md`：四层结构、公共能力及模块的内部调用、规则、流程、源码与测试入口。模块说明按学习目标与范围、调用方式、核心流程与规则、失败边界、源码与测试入口组织。
-- `docs/reference/configuration.md`：配置加载语义、环境变量和默认值；运行指南与模块文档通过链接引用详细定义。
-- `docs/reference/api/`：公开 HTTP 合同；`README.md` 为接口总览，`common.md` 维护调用约定、身份、请求标识和错误响应，`health.md`、`users.md`、`files.md` 分别维护健康、用户和文件接口。内部知识库服务不列为公开 API。
-- `docs/reference/database/knowledge.md`：当前知识库四表字段、可空性、索引、关系和设计限制，不记录旧项目迁移过程。
-
-临时方案统一放在项目根目录 `.work/plans/`，由 `.gitignore` 排除，不暂存或提交；执行完成、所需功能检查通过且现行文档同步后删除，未完成时暂留本地。文档区不建立历史归档，不保留任务执行记录、审查报告或历史测试结果。仍适用的业务约束和设计理由直接维护在对应现行说明中；实际验证结果在当次交付中说明，不将编译成功描述为测试通过。
-
-源码注释优先解释业务规则、更新意图、归属校验、流资源所有权、UTC 转换和外部失败边界，避免逐行复述代码。port 的输入输出与资源释放合同发生变化时，同步其注释和模块说明。
-
-以下变化必须同步修改对应现行文档、README 入口和本文件：
-
-- 技术栈或依赖版本变化。
-- 模块结构、职责或依赖方向变化。
-- 启动命令变化。
-- 环境变量变化。
-- API 路径或响应变化。
-- 测试和构建命令变化。
-
-公开 HTTP 接口文档维护在 `docs/reference/api/`，README 提供入口。新增或修改请求参数、校验规则、状态码、响应字段或错误码时，同步对应业务接口文档及公共约定；只记录生产源码中实际存在的接口，不把测试 Controller 或内部 Java 合同列为公开接口。
+临时方案统一放在项目根目录 `.work/plans/`，由 `.gitignore` 排除，不暂存或提交；完成后删除。源码注释优先解释业务规则、更新意图、归属校验、流资源所有权、UTC 转换和外部失败边界，避免逐行复述代码。port 的输入输出与资源释放合同发生变化时，同步其注释。
 
 ## Git 操作与交付边界
 

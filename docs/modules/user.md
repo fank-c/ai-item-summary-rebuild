@@ -2,7 +2,7 @@
 
 用户模块提供资料 CRUD、BCrypt 密码摘要、逻辑删除，以及跨模块的用户存在性查询。它为后续 AI 应用提供基础用户数据，当前没有登录、Session 或权限功能。
 
-学习目标是理解 HTTP 校验、用例编排、领域数据和持久化适配之间的边界，并看清“省略密码”如何贯穿服务与 SQL。运行步骤见 [运行指南](../guides/getting-started.md)，输入、六字段响应和调用示例见 [用户接口](../reference/api/users.md)，错误码见 [公共约定](../reference/api/common.md#错误码)。返回 [文档导航](../README.md)。
+学习目标是理解 HTTP 校验、用例编排、领域数据和持久化适配之间的边界，并看清“省略密码”如何贯穿服务与 SQL。启动和测试命令见 [项目 README](../../README.md)，输入和六字段响应见 [用户接口](../reference/api.md#用户接口)，错误码见 [错误响应](../reference/api.md#错误响应)。返回 [文档导航](../README.md)。
 
 响应只包含 `id/name/email/status/createAt/updateAt`。密码摘要只用于内部处理，不进入 HTTP 响应；记录中的删除时间也不公开。
 
@@ -42,7 +42,7 @@ BCrypt 为密码生成带随机盐的摘要，同样的密码可以得到不同�
 
 未删除判断与 `status` 无关。禁用状态管理尚未实现，不用 `status` 过滤普通查询或用户引用。
 
-领域类型使用 `Instant`，数据库时间是 UTC `DATETIME(6)`。创建与修改时间保留微秒；删除时间由数据库生成。UTC 类型处理器及连接要求见 [工程结构](../architecture.md#持久化与时间)。
+领域类型使用 `Instant`，数据库时间是 UTC `DATETIME(6)`。创建与修改时间保留微秒；删除时间由数据库生成。UTC 类型处理器及连接要求见 [工程结构](../reference/architecture.md#持久化与时间)。
 
 ## 跨模块用户引用与模拟身份
 
@@ -52,28 +52,10 @@ BCrypt 为密码生成带随机盐的摘要，同样的密码可以得到不同�
 - 关闭模拟后使用数据库实现，查询未删除用户。
 - 这项能力只回答“用户是否存在”，不能代替认证或权限检查。
 
-用户 CRUD 当前不读取请求身份。关闭 `APP_AUTH_MOCK_ENABLED` 后 CRUD 仍可调用；文件接口则因缺少身份返回 401。模拟身份的配置和请求生命周期见 [工程结构](../architecture.md#请求身份与用户引用)。
+用户 CRUD 当前不读取请求身份。关闭 `APP_AUTH_MOCK_ENABLED` 后 CRUD 仍可调用；文件接口则因缺少身份返回 401。模拟身份的配置和请求生命周期见 [工程结构](../reference/architecture.md#请求身份与用户引用)。
 
-## 代码地图
+## 源码与验证入口
 
-| 位置 | 职责 | 关键源码 |
-| --- | --- | --- |
-| `web.user.controller`、`request`、`response` | `/api/users` CRUD、请求校验、响应映射 | [UserController](../../src/main/java/com/item/aisummary/web/user/controller/UserController.java)、[CreateUserRequest](../../src/main/java/com/item/aisummary/web/user/request/CreateUserRequest.java)、[UpdateUserRequest](../../src/main/java/com/item/aisummary/web/user/request/UpdateUserRequest.java)、[UserResponse](../../src/main/java/com/item/aisummary/web/user/response/UserResponse.java) |
-| `application.user.service`、`command`、`result` | 接收命令，协调文本规则、仓储和摘要，返回资料结果 | [UserService](../../src/main/java/com/item/aisummary/application/user/service/UserService.java)、[SaveUserCommand](../../src/main/java/com/item/aisummary/application/user/command/SaveUserCommand.java)、[UserProfile](../../src/main/java/com/item/aisummary/application/user/result/UserProfile.java) |
-| `application.user.port`、`reference` | 仓储、摘要能力与跨模块引用合同 | [UserRepository](../../src/main/java/com/item/aisummary/application/user/port/UserRepository.java)、[PasswordHasher](../../src/main/java/com/item/aisummary/application/user/port/PasswordHasher.java)、[UserReferenceService](../../src/main/java/com/item/aisummary/application/user/reference/UserReferenceService.java) |
-| `domain.user.model`、`exception` | 用户业务数据与文本边界、未找到异常 | [User](../../src/main/java/com/item/aisummary/domain/user/model/User.java)、[UserNotFoundException](../../src/main/java/com/item/aisummary/domain/user/exception/UserNotFoundException.java) |
-| `infrastructure.user.config`、`persistence.entity / mapper / repository`、`reference` | 用户装配、表映射、SQL 与仓储适配、引用切换 | [UserConfiguration](../../src/main/java/com/item/aisummary/infrastructure/user/config/UserConfiguration.java)、[MyBatisUserRepository](../../src/main/java/com/item/aisummary/infrastructure/user/persistence/repository/MyBatisUserRepository.java) |
-| `infrastructure.security`、`persistence.typehandler`、`time` | BCrypt、共享 UTC 转换和时钟 | [BCryptPasswordHasher](../../src/main/java/com/item/aisummary/infrastructure/security/BCryptPasswordHasher.java)、[UtcInstantTypeHandler](../../src/main/java/com/item/aisummary/infrastructure/persistence/typehandler/UtcInstantTypeHandler.java)、[ClockConfiguration](../../src/main/java/com/item/aisummary/infrastructure/time/ClockConfiguration.java) |
+先读 [UserController](../../src/main/java/com/item/aisummary/web/user/controller/UserController.java) 和 [UserService](../../src/main/java/com/item/aisummary/application/user/service/UserService.java)，再对照 [用户持久化](../../src/main/java/com/item/aisummary/infrastructure/user/persistence/) 的更新列，以及 [UserHttpTest](../../src/test/java/com/item/aisummary/web/user/controller/UserHttpTest.java) 和 [用户仓储测试](../../src/test/java/com/item/aisummary/infrastructure/user/persistence/repository/)。
 
-## 测试与学习入口
-
-| 测试 | 可观察行为 |
-| --- | --- |
-| [UserHttpTest](../../src/test/java/com/item/aisummary/web/user/controller/UserHttpTest.java) | CRUD、响应字段、密码空格与长度、逻辑删除和请求标识 |
-| [UserServiceTest](../../src/test/java/com/item/aisummary/application/user/service/UserServiceTest.java) | 文本处理、密码更新意图、写入行数和防御性查询 |
-| [UserRepositoryTest](../../src/test/java/com/item/aisummary/infrastructure/user/persistence/repository/UserRepositoryTest.java) | H2 上真实 Mapper 的更新列、旧摘要保护与 UTC 微秒 |
-| [BCryptPasswordHasherTest](../../src/test/java/com/item/aisummary/infrastructure/security/BCryptPasswordHasherTest.java) | 盐、原始空格、已有摘要兼容性和 UTF-8 字节上限 |
-| [UserReferenceConfigurationTest](../../src/test/java/com/item/aisummary/infrastructure/user/reference/UserReferenceConfigurationTest.java) | 模拟与数据库引用切换、身份长度和不按状态过滤 |
-| [UserMySqlIT](../../src/test/java/com/item/aisummary/web/user/controller/UserMySqlIT.java) | 显式启用时执行正式 MySQL schema 和完整 HTTP 生命周期 |
-
-推荐先阅读 Controller 和 Service，再对照仓储的更新列及上述测试。全部测试命令和外部验收边界见 [测试说明](../guides/testing.md)。
+测试命令见 [项目 README](../../README.md#验证)。普通测试使用 H2 和替身；真实 MySQL 用户验收需按 [专用测试配置](../reference/configuration.md#专用-mysql-测试变量) 显式启用 `mysql-it`。
