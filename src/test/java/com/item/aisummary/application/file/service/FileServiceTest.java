@@ -132,7 +132,7 @@ class FileServiceTest {
             new FilePolicy(4, Set.of("txt"), "中".repeat(150), Duration.ofMinutes(15)));
 
         assertThatThrownBy(() -> guarded.upload("owner", "minio", input)).isInstanceOf(FileValidationException.class)
-            .hasMessage("对象 Key 的 UTF-8 长度不能超过 1023 字节");
+            .hasMessage("对象 Key 的单个路径段不能超过 255 个 UTF-8 字节");
         verify(input, never()).openStream();
         verifyNoInteractions(repository);
         assertThat(storage.objects).isEmpty();

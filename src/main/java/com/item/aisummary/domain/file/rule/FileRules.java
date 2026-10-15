@@ -12,6 +12,7 @@ import java.util.UUID;
 /** 文件输入文本规则；只约束名称和 MIME，不识别实际内容格式。 */
 public final class FileRules {
     private static final int MAX_OBJECT_KEY_UTF8_BYTES = 1023;
+    private static final int MAX_OBJECT_KEY_SEGMENT_UTF8_BYTES = 255;
     private static final DateTimeFormatter UTC_DATE =
             DateTimeFormatter.ofPattern("yyyy/MM/dd").withZone(ZoneOffset.UTC);
 
@@ -69,34 +70,37 @@ public final class FileRules {
     /**
      * 为新上传的文件生成标准对象存储 Key。
      *
-     * <p>规则为：{prefix}/{yyyy/MM/dd}/{uuid}-{sanitizedFilename}。
-     * 仅支持新上传文件；Java 字符长度不超过 512，UTF-8 编码字节数不超过 1023 字节。
+     * <p>规则为：{prefix}/{yyyy/MM/dd}/{uuid}.{lowercaseExtension}。调用方先通过 requireName 校验名称与扩展名；
+     * 展示名称完整保存为元数据，不写入 Key，也不截断。仅校验新 Key：Java 字符长度不超过 512，
+     * UTF-8 总字节数不超过 1023，每个路径段不超过 255 字节。历史 Key 不经此生成入口。
      *
      * @param prefix 配置的存储前缀
      * @param name 文件原始名称
      * @param now 当前 UTC 时间戳
      * @return 生成的对象存储 Key
-     * @throws FileValidationException 对象 Key 字符长度超过 512 或 UTF-8 字节超过 1023
+     * @throws FileValidationException 扩展名非法，或对象 Key 超过总长度、总字节或路径段字节预算
      */
     public static String objectKey(String prefix, String name, Instant now) {
-        String filename =
-                basename(name)
-                        .trim()
-                        .replaceAll("[^\\p{L}\\p{N}._-]", "_")
-                        .replace("..", "_")
-                        .replaceFirst("^\\.+", "");
-        if (filename.isBlank()) {
-            filename = "file";
+        String filename = basename(name).trim();
+        int dot = filename.lastIndexOf('.');
+        String extension = dot < 0 ? "" : filename.substring(dot + 1).toLowerCase(Locale.ROOT);
+        if (!extension.matches("[a-z0-9]+")) {
+            throw new FileValidationException("文件扩展名不允许");
         }
 
-        // 日期固定使用 UTC，UUID 让同名上传使用独立对象；超限时不截断名称。
-        String key = prefix + "/" + UTC_DATE.format(now) + "/" + UUID.randomUUID() + "-" + filename;
+        // UUID 保证同名上传使用独立对象；不把展示名称放入 MinIO 受限的单个路径段。
+        String key = prefix + "/" + UTC_DATE.format(now) + "/" + UUID.randomUUID() + "." + extension;
         // 512 是原有 Java 字符长度边界；1023 是两个厂商共同采用的 UTF-8 字节预算。
         if (key.length() > 512) {
             throw new FileValidationException("对象 Key 超过长度限制");
         }
         if (key.getBytes(StandardCharsets.UTF_8).length > MAX_OBJECT_KEY_UTF8_BYTES) {
             throw new FileValidationException("对象 Key 的 UTF-8 长度不能超过 1023 字节");
+        }
+        for (String segment : key.split("/")) {
+            if (segment.getBytes(StandardCharsets.UTF_8).length > MAX_OBJECT_KEY_SEGMENT_UTF8_BYTES) {
+                throw new FileValidationException("对象 Key 的单个路径段不能超过 255 个 UTF-8 字节");
+            }
         }
         return key;
     }

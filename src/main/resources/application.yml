@@ -92,3 +92,6 @@ app:
 
 server:
   port: ${SERVER_PORT:8080}
+  tomcat:
+    # Allow UTF-8 filenames up to the application limit, while keeping a finite per-part header budget.
+    max-part-header-size: ${APP_FILE_MAX_PART_HEADER_SIZE:4KB}

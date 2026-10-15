@@ -13,11 +13,11 @@
 | `storageType` | query | 是 | 仅接受已启用的 `minio` 或 `aliyun`，不自动切换 |
 | `file` | multipart | 是 | 非空文件，原文件名非空白、裁剪后最多 255 字符 |
 
-默认允许 txt、md、pdf、docx，忽略扩展名大小写。单文件上限通过 `APP_FILE_MAX_SIZE` 控制，默认 20MB；实际读流时再检查字节数并计算 SHA-256。整个请求通过 `APP_FILE_REQUEST_MAX_SIZE` 控制，默认 20MB，含 multipart 边界和字段开销，因此恰好 20MB 的文件可能超过请求上限。
+默认允许 txt、md、pdf、docx，忽略扩展名大小写。单文件上限通过 `APP_FILE_MAX_SIZE` 控制，默认 20MB；实际读流时再检查字节数并计算 SHA-256。整个请求通过 `APP_FILE_REQUEST_MAX_SIZE` 控制，默认 20MB，含 multipart 边界和字段开销，因此恰好 20MB 的文件可能超过请求上限。Tomcat 单个 multipart part 的头部上限由 `APP_FILE_MAX_PART_HEADER_SIZE` 控制，默认 4KB，容纳合法 UTF-8 长文件名；头部超限也返回 `413 / FILE_SIZE_LIMIT_EXCEEDED`，不代表正文一定超限。
 
-新上传在首次读流前校验生成 Key：保留 512 的 `String.length()` 上限，另要求 UTF-8 不超过 1023 字节。长多字节前缀和名称共同占用预算；超限为 `400 / FILE_VALIDATION_ERROR`，不截断名称、不读流、不上传或入库。1023 字节为两个存储共用的应用预算，既有记录的下载、删除和内部读取不重新套用此新 Key 检查。
+新上传 Key 使用 `{prefix}/{yyyy/MM/dd}/{UUID}.{小写扩展名}`，展示名称完整保存在 `originName`，不拼入 Key，也不截断。首次读流前校验新 Key：`String.length()` 最多 512，UTF-8 总字节最多 1023，每个 `/` 分隔的路径段最多 255 个 UTF-8 字节。自定义前缀必须符合逐段预算；超限为 `400 / FILE_VALIDATION_ERROR`，不读流、不上传或入库。既有记录的下载、删除和内部读取按原 Key 执行，不重新套用新上传检查。
 
-MIME 去参数、裁剪、转小写；缺失时使用 `application/octet-stream`，规范化后最多 255 字符。扩展名与 MIME 不代表内容格式验证，也不代表已实现 PDF/DOCX 解析。
+MIME 去参数、裁剪、转小写；缺失时使用 `application/octet-stream`，规范化后最多 255 字符。扩展名与 MIME 校验不识别文件真实格式；文件上传接口仅负责对象存储与元数据记录，不在此触发文档内容解析。
 
 ```bash
 curl -i -X POST 'http://localhost:8080/api/files?storageType=minio' \
@@ -77,6 +77,8 @@ curl -i "http://localhost:8080/api/files/$FILE_ID/download-url"
 
 URL 自身是临时凭证，任何持有者均能在有效期内使用。接口归属检查仅发生在签发时。签名时不预先检查远端对象；URL 签发成功不能证明对象仍存在。若对象存储 endpoint 是内部网络地址，下载客户端也必须能访问该地址。
 
+新上传对象的 URL 末段为 UUID 与扩展名，不含原始文件名。客户端应保存上传响应的 `originName`，用于显示或设置本地下载名称；当前签名不额外指定 Content-Disposition。
+
 缺少身份为 `401 AUTHENTICATION_REQUIRED`。记录不存在、已删除、停用、未完成、非所有者、缺失 Key 或存储类型不可用统一为 `404 RESOURCE_NOT_FOUND`，不暴露他人文件状态。签名失败为 `502 OBJECT_STORAGE_UNAVAILABLE`；数据库错误为 `500 INTERNAL_ERROR`。
 
 ## 删除文件
@@ -101,7 +103,8 @@ curl -i -X DELETE "http://localhost:8080/api/files/$FILE_ID"
 - [FileService](../../../src/main/java/com/item/aisummary/application/file/service/FileService.java)：文件用例与归属检查。
 - [FileHttpTest](../../../src/test/java/com/item/aisummary/web/file/controller/FileHttpTest.java)：H2 与存储替身上的文件生命周期和响应字段。
 - [FileAuthenticationHttpTest](../../../src/test/java/com/item/aisummary/web/file/controller/FileAuthenticationHttpTest.java)、[FileFailureHttpTest](../../../src/test/java/com/item/aisummary/web/file/controller/FileFailureHttpTest.java)：身份与失败边界。
-- [FileMultipartHttpTest](../../../src/test/java/com/item/aisummary/web/file/controller/FileMultipartHttpTest.java)：真实容器 multipart 限制。
+- [FileMultipartHttpTest](../../../src/test/java/com/item/aisummary/web/file/controller/FileMultipartHttpTest.java)：真实容器单文件与整个请求限制。
+- [FileLongFilenameMultipartHttpTest](../../../src/test/java/com/item/aisummary/web/file/controller/FileLongFilenameMultipartHttpTest.java)：生产头部配置下真实容器长文件名保留、非法名称 400 和头部超限 413。
 - [FileKeyValidationHttpTest](../../../src/test/java/com/item/aisummary/web/file/controller/FileKeyValidationHttpTest.java)：超长 Key 的 400 和无写入副作用。
 
 测试命令与验证边界见 [测试说明](../../guides/testing.md)。

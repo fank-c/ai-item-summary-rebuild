@@ -74,7 +74,9 @@ Invoke-RestMethod -Uri http://localhost:8080/api/health
 
 启用后缺少必填配置会拒绝启动。应用不会自动创建 Bucket。上传、下载地址及删除的调用示例见 [文件接口](../reference/api/files.md)。
 
-默认单文件与整个 multipart 请求都是 `20MB`；请求额外包含边界和表单元数据。需要上传恰好 20 MB 的文件时，适当增大 `APP_FILE_REQUEST_MAX_SIZE`。
+默认单文件与整个 multipart 请求都是 `20MB`；请求额外包含边界和表单元数据。需要上传恰好 20 MB 的文件时，适当增大 `APP_FILE_REQUEST_MAX_SIZE`。`APP_FILE_MAX_PART_HEADER_SIZE` 默认 `4KB`，用于容纳 UTF-8 长文件名等 part 头部；减小可能让合法名称提前返回 413。
+
+新对象 Key 为前缀/UTC 日期/UUID.小写扩展名，原名完整保存在 `originName`，不截断、不进入 Key。自定义多字节前缀的每个路径段不得超过 255 个 UTF-8 字节；旧 Key 继续按原记录下载和删除。
 
 ## 5. JAR 与 IDE 运行
 

@@ -249,11 +249,11 @@ OPENAI_MODEL=<model-name>
 - HTTP 固定三个接口：POST `/api/files?storageType=minio|aliyun`、GET `/api/files/{fileId}/download-url`、DELETE `/api/files/{fileId}`。没有详情或列表 GET，Location 只标识资源。
 - 上传响应固定 `id/originName/mime/size/uploadStatus/createAt/updateAt`；新上传 uploadStatus=completed，不公开存储位置、摘要或所有者。
 - 身份来自请求上下文或内部显式 actorUserId；所有文件服务入口先校验非空及最多 64 个 Unicode 码点，再执行查询、读流或存储操作。内部 ID 不裁剪、转大小写或截断。create_by 为所有者，不查询用户表。未删除、status=1、completed 且归属匹配才可下载、删除或读取；失败统一 404，无身份 401，超长内部 ID 抛 IllegalArgumentException，经 HTTP 传播时为 400 REQUEST_VALIDATION_ERROR。
-- 先完整读取实际字节并计算 SHA-256，再重开相同内容上传。默认 20MB、txt/md/pdf/docx，不识别内容格式。Bucket 只取配置，Key 取前缀、UTC 日期、随机 UUID 和清理后的名称。
-- 文件名和规范化 MIME 最多 255 字符；Key 保留 512 的 String.length() 上限，新生成的 Key 另限制 UTF-8 不超过 1023 字节。此值是两个存储的共同应用预算，在首次读流前检查，超限为 400 FILE_VALIDATION_ERROR，不截断名称。历史 Key 的下载、删除和内部读取不套用此新上传检查。扩展名忽略大小写，MIME 去参数并转小写，空 MIME 使用 application/octet-stream。
+- 先完整读取实际字节并计算 SHA-256，再重开相同内容上传。默认 20MB、txt/md/pdf/docx，不识别内容格式。Bucket 只取配置，新 Key 使用 `{prefix}/{yyyy/MM/dd}/{UUID}.{小写扩展名}`，原名完整保存在 originName，不拼入 Key、不截断。
+- 文件名和规范化 MIME 最多 255 字符；Key 保留 512 的 String.length() 上限，新生成的 Key 另限制 UTF-8 总字节不超过 1023，每个 `/` 分隔的路径段不超过 255 个 UTF-8 字节。总预算兼顾两个存储，单段预算避免 MinIO 对长段拒绝；在首次读流前检查，超限为 400 FILE_VALIDATION_ERROR。多级前缀逐段检查，原名不进入 Key、不截断。历史 Key 的下载、删除和内部读取不重新生成或套用新上传检查。扩展名忽略大小写，新 Key 扩展名小写，MIME 去参数并转小写，空 MIME 使用 application/octet-stream。
 - 存储类型必须对应已启用适配器，不自动回退。默认两个厂商关闭，无存储凭据仍可启动；已启用时缺 endpoint、bucket 或凭据拒绝启动。
 - 适配器直接调用 SDK，只保留上传、读取流、GET 签名、删除；不引入 ResilienceExecutor、重试策略、HEAD 核对、直传和异步任务。
-- 下载期限配置为 1～604800 整数秒（默认 15m），不探测远端对象。地址是临时凭证，持有者可以使用。
+- 下载期限配置为 1～604800 整数秒（默认 15m），不探测远端对象。地址是临时凭证，持有者可以使用。新 Key 的 URL 末段为 UUID 与扩展名，客户端需使用上传响应的 originName 显示或保存原名，当前不额外设置下载 Content-Disposition。
 - 先远端删除，再逻辑删除一行，deleted_at 使用数据库 CURRENT_TIMESTAMP(6)，刷新 update_by/update_at，保留 status。删除不清理知识库内容或向量。
 - `FileContentService.requireOwnedProcessable(actorUserId,fileId)` 返回名称和 MIME；`openForProcessing(actorUserId,fileId)` 返回元数据和流，调用者通过 try-with-resources 关闭。后台任务必须传用户 ID。
 - 业务错误 400 FILE_VALIDATION_ERROR，容器超限 413 FILE_SIZE_LIMIT_EXCEEDED，SDK 错误 502 OBJECT_STORAGE_UNAVAILABLE。数据库失败仍为 500 INTERNAL_ERROR，不暴露 SDK 或 SQL 细节。
@@ -266,7 +266,8 @@ OPENAI_MODEL=<model-name>
 | --- | --- |
 | `APP_FILE_MAX_SIZE` | `20MB`，同时约束 multipart 单文件和业务实际字节 |
 | `APP_FILE_REQUEST_MAX_SIZE` | `20MB`，整个 multipart 请求（含边界和元数据），需要上传恰好 20MB 文件时适当增大 |
-| `FILE_STORAGE_KEY_PREFIX` | `files`，规范化后 1～150 字符；多字节前缀占用总 Key 的 1023 字节预算 |
+| `APP_FILE_MAX_PART_HEADER_SIZE` | `4KB`，Tomcat 单个 multipart part 的头部字节上限；容纳合法 UTF-8 长文件名，保留正的有限预算，超限仍为 413 |
+| `FILE_STORAGE_KEY_PREFIX` | `files`，规范化后 1～150 字符；每个路径段最多 255 个 UTF-8 字节，也占用总 Key 的 1023 字节预算 |
 | `FILE_STORAGE_DOWNLOAD_URL_EXPIRATION` | `15m`，整数秒，1s～7d |
 | `FILE_STORAGE_CONNECT_TIMEOUT` | `5s`，SDK 连接；OSS 获取连接等待也采用该值 |
 | `FILE_STORAGE_READ_TIMEOUT` | `60s`，SDK 读取超时 |
@@ -280,7 +281,7 @@ OPENAI_MODEL=<model-name>
 | `ALIYUN_OSS_ENDPOINT`、`ALIYUN_OSS_BUCKET` | 空，启用时必填 |
 | `ALIYUN_OSS_ACCESS_KEY_ID`、`ALIYUN_OSS_ACCESS_KEY_SECRET` | 空，启用时必填，本地提供 |
 
-SDK 超时要求正整数毫秒且不超过 Integer.MAX_VALUE 毫秒；不保证整个流处理的总时长。单文件与请求同时默认 20MB，请求会有 multipart 额外开销。
+SDK 超时要求正整数毫秒且不超过 Integer.MAX_VALUE 毫秒；不保证整个流处理的总时长。单文件与请求同时默认 20MB，请求会有 multipart 额外开销。`server.tomcat.max-part-header-size` 映射 `APP_FILE_MAX_PART_HEADER_SIZE`，默认 4KB；单文件、整个请求和 part 头部是三种独立限制，减小头部预算可能使合法名称提前返回 413，此码不只表示正文超限。
 
 ## 知识库基础服务与表结构约定
 

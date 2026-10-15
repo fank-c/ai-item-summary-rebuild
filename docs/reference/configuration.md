@@ -110,6 +110,7 @@ Unicode 码点指一个完整 Unicode 字符，补充平面字符计为 1。模�
 | --- | --- | --- |
 | `APP_FILE_MAX_SIZE` | `20MB` | multipart 单文件限制及业务实际字节上限 |
 | `APP_FILE_REQUEST_MAX_SIZE` | `20MB` | 整个 multipart 请求上限，包含边界和元数据 |
+| `APP_FILE_MAX_PART_HEADER_SIZE` | `4KB` | Tomcat 单个 multipart part 的头部字节上限，映射 `server.tomcat.max-part-header-size`，容纳合法 UTF-8 长文件名；超限仍返回 413 |
 | `FILE_STORAGE_KEY_PREFIX` | `files` | 规范化后 1～150 字符；参与 Key 的 UTF-8 总预算 |
 | `FILE_STORAGE_DOWNLOAD_URL_EXPIRATION` | `15m` | 整数秒，范围 `1s`～`7d` |
 | `FILE_STORAGE_CONNECT_TIMEOUT` | `5s` | SDK 连接超时；OSS 获取连接等待也用此值 |
@@ -118,7 +119,11 @@ Unicode 码点指一个完整 Unicode 字符，补充平面字符计为 1。模�
 
 扩展名白名单当前在主配置中固定为 `txt`、`md`、`pdf`、`docx`，没有对应环境变量。校验不识别真实文件格式。
 
-生成的新 Key 同时限制 `String.length()` 不超过 512 和 UTF-8 不超过 1023 字节。多字节前缀与文件名共同占用预算，不截断名称。SDK 超时须为正整数毫秒，且不超过 `Integer.MAX_VALUE` 毫秒；不承诺整个流处理的总时长。
+新 Key 使用 `{prefix}/{yyyy/MM/dd}/{UUID}.{小写扩展名}`，原始展示名称完整保存在元数据中，不进入 Key，也不截断。新 Key 同时限制 `String.length()` 不超过 512、UTF-8 总字节不超过 1023、每个 `/` 分隔的路径段不超过 255 个 UTF-8 字节。长多字节前缀需逐段符合预算，超限在首次读流前拒绝；历史 Key 仍按记录值下载、删除与读取，不重新校验。
+
+multipart 的单文件、整个请求和单个 part 头部是三种独立限制。默认 4KB part 头部预算兼顾合法长文件名与 MIME；减小该值可能让文件名尚未进入业务校验就返回 413，413 不仅表示文件正文超限。`APP_FILE_MAX_PART_HEADER_SIZE` 应保留正的有限大小，不以关闭限制替代文件名校验。下载 URL 的末段是 UUID 与扩展名，客户端需使用上传响应的 `originName` 显示或保存原始名称；当前不额外设置下载 Content-Disposition。
+
+SDK 超时须为正整数毫秒，且不超过 `Integer.MAX_VALUE` 毫秒；不承诺整个流处理的总时长。
 
 ## MinIO
 

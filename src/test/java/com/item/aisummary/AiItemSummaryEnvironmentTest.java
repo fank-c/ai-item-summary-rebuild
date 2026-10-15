@@ -54,6 +54,7 @@ class AiItemSummaryEnvironmentTest {
             APP_AUTH_MOCK_USERNAME=本地演示用户
             APP_FILE_MAX_SIZE=7MB
             APP_FILE_REQUEST_MAX_SIZE=8MB
+            APP_FILE_MAX_PART_HEADER_SIZE=6KB
             FILE_STORAGE_DOWNLOAD_URL_EXPIRATION=10m
             MINIO_ENABLED=true
             MINIO_ENDPOINT=http://127.0.0.1:19000
@@ -101,6 +102,7 @@ class AiItemSummaryEnvironmentTest {
         assertThat(values.getProperty("app.file.upload.max-size")).isEqualTo("7MB");
         assertThat(values.getProperty("spring.servlet.multipart.max-file-size")).isEqualTo("7MB");
         assertThat(values.getProperty("spring.servlet.multipart.max-request-size")).isEqualTo("8MB");
+        assertThat(values.getProperty("server.tomcat.max-part-header-size")).isEqualTo("6KB");
         assertThat(values.getProperty("app.file.storage.download-url-expiration")).isEqualTo("10m");
         assertThat(values.getProperty("app.file.storage.minio.enabled")).isEqualTo("true");
         assertThat(values.getProperty("app.file.storage.minio.endpoint")).isEqualTo("http://127.0.0.1:19000");
@@ -111,19 +113,23 @@ class AiItemSummaryEnvironmentTest {
 
     @Test
     void processEnvironmentOverridesLocalFile() throws Exception {
-        Files.writeString(workingDirectory.resolve(".env"), "SERVER_PORT=9081\nDB_USERNAME=local-user\n");
+        Files.writeString(workingDirectory.resolve(".env"),
+            "SERVER_PORT=9081\nDB_USERNAME=local-user\nAPP_FILE_MAX_PART_HEADER_SIZE=5KB\n");
         Properties values = probe("src/main/resources/application.yml",
-            Map.of("SERVER_PORT", "9082", "DB_USERNAME", "process-user"));
+            Map.of("SERVER_PORT", "9082", "DB_USERNAME", "process-user", "APP_FILE_MAX_PART_HEADER_SIZE", "6KB"));
         assertThat(values.getProperty("server.port")).isEqualTo("9082");
         assertThat(values.getProperty("spring.datasource.username")).isEqualTo("process-user");
+        assertThat(values.getProperty("server.tomcat.max-part-header-size")).isEqualTo("6KB");
     }
 
     @Test
     void commandLineOverridesProcessEnvironmentAndLocalFile() throws Exception {
         Files.writeString(workingDirectory.resolve(".env"), "SERVER_PORT=9081\n");
-        Properties values = probe("src/main/resources/application.yml", Map.of("SERVER_PORT", "9082"),
-            "--server.port=9083");
+        Properties values = probe("src/main/resources/application.yml",
+            Map.of("SERVER_PORT", "9082", "APP_FILE_MAX_PART_HEADER_SIZE", "6KB"),
+            "--server.port=9083", "--server.tomcat.max-part-header-size=7KB");
         assertThat(values.getProperty("server.port")).isEqualTo("9083");
+        assertThat(values.getProperty("server.tomcat.max-part-header-size")).isEqualTo("7KB");
     }
 
     @Test
@@ -136,6 +142,7 @@ class AiItemSummaryEnvironmentTest {
         assertThat(values.getProperty("spring.ai.model.embedding")).isEqualTo("none");
         assertThat(values.getProperty("spring.ai.vectorstore.type")).isEqualTo("none");
         assertThat(values.getProperty("app.knowledge.rag.enabled")).isEqualTo("false");
+        assertThat(values.getProperty("server.tomcat.max-part-header-size")).isEqualTo("4KB");
         assertThat(values.getProperty("spring.ai.openai.api-key")).isEmpty();
         assertThat(values.getProperty("app.file.storage.minio.enabled")).isEqualTo("false");
         assertThat(values.getProperty("app.file.storage.aliyun.enabled")).isEqualTo("false");
@@ -210,7 +217,8 @@ class AiItemSummaryEnvironmentTest {
                     "app.knowledge.rag.punctuation-marks", "app.knowledge.rag.max-source-size",
                     "spring.ai.openai.chat.model", "app.auth.mock.user-id", "app.auth.mock.username",
                     "app.file.upload.max-size", "spring.servlet.multipart.max-file-size",
-                    "spring.servlet.multipart.max-request-size", "app.file.storage.download-url-expiration",
+                    "spring.servlet.multipart.max-request-size", "server.tomcat.max-part-header-size",
+                    "app.file.storage.download-url-expiration",
                     "app.file.storage.minio.enabled", "app.file.storage.minio.endpoint",
                     "app.file.storage.minio.secret-key", "app.file.storage.aliyun.enabled",
                     "app.file.storage.aliyun.access-key-secret")) {

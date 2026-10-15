@@ -56,8 +56,8 @@
 | `400` | `REQUEST_BODY_INVALID` | 请求体错误 | 请求体缺失或 JSON 无法解析 |
 | `404` | `RESOURCE_NOT_FOUND` | 资源不存在 | 用户不存在或已删除；文件不存在、删除、停用、未完成、非所有者或存储类型不可用；没有对应资源路径 |
 | `401` | `AUTHENTICATION_REQUIRED` | 需要身份 | 文件接口或其他需要当前身份的入口未取得身份；健康检查和用户 CRUD 不读取身份 |
-| `400` | `FILE_VALIDATION_ERROR` | 文件参数错误 | 空文件、名称或扩展名非法、业务大小超限、新 Key 超过 512 长度或 1023 个 UTF-8 字节、存储类型缺失/非法/未启用、multipart 格式错误 |
-| `413` | `FILE_SIZE_LIMIT_EXCEEDED` | 文件超过大小限制 | 容器提前拦截单文件或整个 multipart 请求超限 |
+| `400` | `FILE_VALIDATION_ERROR` | 文件参数错误 | 空文件、名称或扩展名非法、业务大小超限、新 Key 超过 512 长度、1023 个 UTF-8 总字节或单个路径段 255 个 UTF-8 字节、存储类型缺失/非法/未启用、multipart 格式错误 |
+| `413` | `FILE_SIZE_LIMIT_EXCEEDED` | 文件超过大小限制 | 容器提前拦截单文件、整个 multipart 请求或单个 part 头部超限 |
 | `405` | `METHOD_NOT_ALLOWED` | 请求方法不支持 | 路径存在但不支持请求方法，例如 GET `/api/files/{fileId}` |
 | `415` | `UNSUPPORTED_MEDIA_TYPE` | 请求媒体类型不支持 | 用户创建/修改或文件上传的 Content-Type 不受支持 |
 | `502` | `OBJECT_STORAGE_UNAVAILABLE` | 对象存储不可用 | SDK 上传、读取、签名或删除失败 |

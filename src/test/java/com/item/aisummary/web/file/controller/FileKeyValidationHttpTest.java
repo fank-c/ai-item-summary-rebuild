@@ -45,7 +45,7 @@ class FileKeyValidationHttpTest {
         mvc.perform(multipart("/api/files").file(file).param("storageType", "minio"))
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.code").value("FILE_VALIDATION_ERROR"))
-            .andExpect(jsonPath("$.detail").value("对象 Key 的 UTF-8 长度不能超过 1023 字节"));
+            .andExpect(jsonPath("$.detail").value("对象 Key 的单个路径段不能超过 255 个 UTF-8 字节"));
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM file_asset", Integer.class)).isEqualTo(before);
         assertThat(storage.objects).hasSize(remoteBefore);
     }

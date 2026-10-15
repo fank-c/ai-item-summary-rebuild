@@ -22,8 +22,8 @@ mvn clean verify
 | 用户 HTTP 与应用 | CRUD、密码边界、六字段响应、错误信息隐藏、写入行数 | `UserHttpTest`、`UserFailureHttpTest`、`UserServiceTest` |
 | 用户持久化与摘要 | H2 真 Mapper 更新列、旧摘要保护、UTC 微秒、BCrypt | `UserRepositoryTest`、`BCryptPasswordHasherTest` |
 | 身份与引用 | 模拟注入清理、关闭后的行为、Unicode 码点限制、引用实现切换 | `MockAuthenticationWebTest`、`MockAuthenticationDisabledWebTest`、`ActorUserIdRulesTest`、`UserReferenceConfigurationTest` |
-| 文件流程与规则 | 实际大小、SHA-256、流关闭、归属状态、Key 字节预算 | `FileServiceTest`、`FileRulesTest`、`FileHttpTest` |
-| 文件 HTTP 边界 | 身份、Key、数据库单边失败、真实容器 multipart 上限 | `FileAuthenticationHttpTest`、`FileKeyValidationHttpTest`、`FileFailureHttpTest`、`FileMultipartHttpTest` |
+| 文件流程与规则 | 实际大小、SHA-256、流关闭、归属状态、长原名与 Key 解耦、总字节与单段预算 | `FileServiceTest`、`FileRulesTest`、`FileHttpTest` |
+| 文件 HTTP 边界 | 身份、Key、历史 Key 透传、数据库单边失败、真实容器单文件/请求/part 头部上限与长 UTF-8 名称 | `FileAuthenticationHttpTest`、`FileKeyValidationHttpTest`、`FileFailureHttpTest`、`FileMultipartHttpTest`、`FileLongFilenameMultipartHttpTest` |
 | 存储与装配 | SDK 元数据、GET 签名、OSS 资源关闭、稳定异常、条件配置 | `StorageAdapterTest`、`FileConfigurationTest` |
 | 公共错误 | 不支持的 Content-Type 返回 415、响应字段、协议头和请求标识 | `GlobalExceptionHandlerHttpTest` |
 | 知识库领域与持久化 | SourceLocation 位置规则、四表 MyBatis Mapper/H2、联合唯一约束、标题 JSON、可空字段与 UTC 微秒 | `KnowledgeRulesTest`、`SourceLocationTest`、`KnowledgePersistenceTest` |
@@ -53,6 +53,14 @@ mvn -Dtest=UserServiceTest,UserRepositoryTest,UserHttpTest test
 ```bash
 mvn -Dtest=FileRulesTest,FileServiceTest,FileKeyValidationHttpTest test
 ```
+
+检查长文件名修复与 multipart 头部预算时：
+
+```bash
+mvn -Dtest=FileRulesTest,FileServiceTest,FileHttpTest,FileKeyValidationHttpTest,FileMultipartHttpTest,FileLongFilenameMultipartHttpTest,AiItemSummaryEnvironmentTest test
+```
+
+`FileLongFilenameMultipartHttpTest` 显式加载生产头部配置，再以测试 YAML 覆盖外部后端并禁用 `.env` 导入；真实容器配合 H2 与存储替身验证长名称保留和 400/413 边界。配置探针另外验证 4KB 默认值及本地文件、进程环境和命令行覆盖，不使用个人凭据。历史超长 Key 用替身验证不被新规则拒绝，不表示当前 MinIO 能存放这些历史对象。
 
 只检查知识库领域、四表、基础服务和片段事务时：
 

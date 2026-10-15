@@ -23,14 +23,14 @@
 
 ## 文本与 Key 规则
 
-- 展示名称只裁剪首尾空白，最多 255 字符；提取路径末段后校验扩展名，忽略大小写，默认允许 txt、md、pdf、docx。路径和特殊字符的清理只用于生成对象 Key。
+- 展示名称只裁剪首尾空白，最多 255 字符，完整保存为 `originName`；提取路径末段后校验扩展名，忽略大小写，默认允许 txt、md、pdf、docx。
 - MIME 去参数、转小写，最多 255 字符；缺少时使用 `application/octet-stream`。
-- Key 使用配置前缀、UTC 日期、随机 UUID 和清理后的名称。Bucket 只来自服务端配置。
-- 新 Key 同时限制 `String.length()` 不超过 512、UTF-8 不超过 1023 字节，首次读流前检查，不截断文件名。
+- Key 使用 `{prefix}/{yyyy/MM/dd}/{UUID}.{小写扩展名}`，不拼入原名称，也不截断展示名称。这样长名称不会占用 MinIO 的路径段预算。Bucket 只来自服务端配置。
+- 新 Key 同时限制 `String.length()` 不超过 512、UTF-8 总字节不超过 1023、每个 `/` 分隔的路径段不超过 255 个 UTF-8 字节，首次读流前检查。
 
-字节预算用于兼顾两个厂商；多字节前缀和名称共同占用预算。历史 Key 的下载、删除及读取直接使用记录值，不套用新上传的生成校验。
+字节预算用于兼顾两个厂商；多级前缀需逐段满足限制。历史 Key 的下载、删除及读取直接使用记录值，不重新生成或套用新上传校验。
 
-扩展名和 MIME 校验不识别文件真实格式，不做内容嗅探、病毒检测或解析。容器限制整个 multipart 请求，服务另核对实际内容，具体大小与超时配置见 [配置说明](../reference/configuration.md#上传与共享存储参数)。
+扩展名和 MIME 校验不识别文件真实格式，不做内容嗅探、病毒检测或解析。容器分别限制单文件、整个 multipart 请求和每个 part 的头部，服务另核对实际内容。part 头部默认 4KB，避免合法 UTF-8 长名称被默认 512B 的容器预算提前拦截，仍保留有限上限。具体大小与超时配置见 [配置说明](../reference/configuration.md#上传与共享存储参数)。
 
 ## 身份、归属与状态
 
@@ -50,7 +50,7 @@ deleted_at IS NULL && status == 1 && uploadStatus == completed && create_by == a
 
 下载地址基于记录中的存储类型和 Key 生成 GET 签名，不发起 HEAD 或探测远端对象。默认有效期 15 分钟，可配置为 1～604800 整数秒。
 
-地址是临时访问凭证，持有地址的人可以下载。元数据存在不保证远端对象存在；签名成功也不等于已经验证下载成功。
+地址是临时访问凭证，持有地址的人可以下载。元数据存在不保证远端对象存在；签名成功也不等于已经验证下载成功。新 Key 的 URL 末段是 UUID 与扩展名，客户端需使用上传响应的 `originName` 显示或保存原始名称，当前不设置额外下载 Content-Disposition。
 
 删除先删除远端对象，再逻辑删除数据库一行，写入数据库生成的 `deleted_at` 并刷新 `update_by/update_at`；保留 `status`。删除不清理知识库内容或向量。
 
@@ -77,7 +77,7 @@ MinIO 和 OSS 适配器直接实现上传、打开流、GET 签名和删除。�
 | 失败位置 | 行为与影响 |
 | --- | --- |
 | 业务输入或首次读流失败 | 400 `FILE_VALIDATION_ERROR`，未开始对象上传 |
-| 容器 multipart 超限 | 413 `FILE_SIZE_LIMIT_EXCEEDED` |
+| 容器单文件、整个 multipart 请求或 part 头部超限 | 413 `FILE_SIZE_LIMIT_EXCEEDED` |
 | 第二次开流或 SDK 操作失败 | 502 `OBJECT_STORAGE_UNAVAILABLE`，不回显厂商细节 |
 | 对象上传成功、数据库插入失败 | 500，可能留下无元数据的孤立对象 |
 | 对象删除成功、数据库更新失败 | 500，记录可能仍可查询，远端对象已不存在 |
@@ -100,12 +100,13 @@ MinIO 和 OSS 适配器直接实现上传、打开流、GET 签名和删除。�
 | 测试 | 可观察行为 |
 | --- | --- |
 | [FileServiceTest](../../src/test/java/com/item/aisummary/application/file/service/FileServiceTest.java) | 实际大小、摘要、两次关闭、身份先行、Key 校验及跨存储失败 |
-| [FileRulesTest](../../src/test/java/com/item/aisummary/domain/file/rule/FileRulesTest.java) | UTF-8 字节边界、UTC 日期与名称清理 |
+| [FileRulesTest](../../src/test/java/com/item/aisummary/domain/file/rule/FileRulesTest.java) | 长名称与 Key 解耦、总长度/UTF-8/路径段预算、UTC 日期与小写扩展名 |
 | [FileHttpTest](../../src/test/java/com/item/aisummary/web/file/controller/FileHttpTest.java) | H2 真 Mapper 生命周期、七字段响应、归属状态及内部内容读取 |
 | [FileAuthenticationHttpTest](../../src/test/java/com/item/aisummary/web/file/controller/FileAuthenticationHttpTest.java) | 关闭模拟身份后的 401 |
 | [FileKeyValidationHttpTest](../../src/test/java/com/item/aisummary/web/file/controller/FileKeyValidationHttpTest.java) | 超长 Key 的 400 与无写入副作用 |
 | [FileFailureHttpTest](../../src/test/java/com/item/aisummary/web/file/controller/FileFailureHttpTest.java) | 对象与数据库单边成功后的安全错误 |
 | [FileMultipartHttpTest](../../src/test/java/com/item/aisummary/web/file/controller/FileMultipartHttpTest.java) | 真实嵌入式容器的文件与总请求大小限制 |
+| [FileLongFilenameMultipartHttpTest](../../src/test/java/com/item/aisummary/web/file/controller/FileLongFilenameMultipartHttpTest.java) | 生产 part 头部配置、ASCII/中文/补充平面长名称、业务 400 与头部超限 413 |
 | [StorageAdapterTest](../../src/test/java/com/item/aisummary/infrastructure/file/storage/StorageAdapterTest.java)、[FileConfigurationTest](../../src/test/java/com/item/aisummary/infrastructure/file/config/FileConfigurationTest.java) | SDK 元数据、签名、流资源、异常与条件装配 |
 
 普通测试使用存储替身或 SDK Mock，不访问真实 Bucket。命令与验证边界见 [测试说明](../guides/testing.md)。

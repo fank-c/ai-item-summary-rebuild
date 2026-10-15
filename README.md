@@ -26,6 +26,8 @@
 
 完整建表、PowerShell / Bash 命令和文件存储准备步骤见 [运行指南](./docs/guides/getting-started.md)。健康检查只证明 HTTP 服务可达，不探测数据库、模型或对象存储。
 
+文件原名完整保存在 `originName`，新对象 Key 使用 UUID 与小写扩展名，避免长名称占用存储路径段。multipart part 头部默认 4KB，可通过 `APP_FILE_MAX_PART_HEADER_SIZE` 覆盖；大小和 Key 预算见 [配置说明](./docs/reference/configuration.md#上传与共享存储参数)。
+
 ## 文档入口
 
 [文档导航](./docs/README.md) 按阅读目的组织内容：

@@ -57,7 +57,7 @@ class FileHttpTest {
         assertThat(row.get("storage_type")).isEqualTo("minio");
         assertThat(row.get("sha256")).isEqualTo("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
         String key = row.get("storage").toString();
-        assertThat(key).matches("files/\\d{4}/\\d{2}/\\d{2}/[0-9a-f-]{36}-a.TXT").doesNotContain("..");
+        assertThat(key).matches("files/\\d{4}/\\d{2}/\\d{2}/[0-9a-f-]{36}\\.txt").doesNotContain("..");
         assertThat(storage.objects.get(key)).containsExactly(97, 98, 99);
         assertThat(response.get("createAt")).isEqualTo(response.get("updateAt"));
         mvc.perform(get("/api/files/{id}", id)).andExpect(status().isMethodNotAllowed());
@@ -106,6 +106,24 @@ class FileHttpTest {
         assertThatThrownBy(() -> contentService.openForProcessing("mock-user", id)).isInstanceOf(FileNotFoundException.class);
         assertThat(storage.opened).isZero();
         assertThat(storage.objects).hasSize(1);
+    }
+
+    @Test void historicalKeysRemainUsableWithoutRegenerationOrNewSegmentChecks() throws Exception {
+        String id = upload("a.txt", "text/plain", "abc");
+        String generatedKey = key(id);
+        String historicalKey = "legacy/2020/01/01/" + "文".repeat(100) + ".txt";
+        storage.objects.put(historicalKey, storage.objects.remove(generatedKey));
+        jdbc.update("UPDATE file_asset SET storage=? WHERE id=?", historicalKey, id);
+
+        var download = mvc.perform(get("/api/files/{id}/download-url", id))
+            .andExpect(status().isOk()).andReturn();
+        assertThat((String) JsonPath.read(download.getResponse().getContentAsString(), "$.url"))
+            .contains("test-bucket/" + historicalKey);
+        try (var content = contentService.openForProcessing("mock-user", id)) {
+            assertThat(content.inputStream().readAllBytes()).containsExactly(97, 98, 99);
+        }
+        mvc.perform(delete("/api/files/{id}", id)).andExpect(status().isNoContent());
+        assertThat(storage.objects).doesNotContainKey(historicalKey);
     }
 
     @Test void internalReaderCarriesMetadataAndClosesStream() throws Exception {
