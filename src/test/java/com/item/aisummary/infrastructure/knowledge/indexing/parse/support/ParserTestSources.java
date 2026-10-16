@@ -1,4 +1,4 @@
-package com.item.aisummary.infrastructure.knowledge.indexing.parse;
+package com.item.aisummary.infrastructure.knowledge.indexing.parse.support;
 
 import com.item.aisummary.application.file.content.FileContentResource;
 import com.item.aisummary.application.knowledge.indexing.source.FileFormat;

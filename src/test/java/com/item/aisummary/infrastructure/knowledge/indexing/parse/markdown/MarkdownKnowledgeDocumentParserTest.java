@@ -1,6 +1,6 @@
-package com.item.aisummary.infrastructure.knowledge.indexing.parse;
+package com.item.aisummary.infrastructure.knowledge.indexing.parse.markdown;
 
-import static com.item.aisummary.infrastructure.knowledge.indexing.parse.ParserTestSources.source;
+import static com.item.aisummary.infrastructure.knowledge.indexing.parse.support.ParserTestSources.source;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;

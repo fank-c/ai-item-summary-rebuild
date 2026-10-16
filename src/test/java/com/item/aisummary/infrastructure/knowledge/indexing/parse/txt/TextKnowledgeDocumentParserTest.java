@@ -1,4 +1,4 @@
-package com.item.aisummary.infrastructure.knowledge.indexing.parse;
+package com.item.aisummary.infrastructure.knowledge.indexing.parse.txt;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
@@ -9,6 +9,8 @@ import com.item.aisummary.application.knowledge.indexing.parse.ContentBlockType;
 import com.item.aisummary.application.knowledge.indexing.parse.ParsedDocument;
 import com.item.aisummary.application.knowledge.indexing.source.FileFormat;
 import com.item.aisummary.application.knowledge.indexing.source.PreparedSource;
+import com.item.aisummary.infrastructure.knowledge.indexing.parse.support.ParserTestSources;
+import com.item.aisummary.infrastructure.knowledge.indexing.parse.support.Utf8TextDecoder;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;

@@ -1,4 +1,4 @@
-package com.item.aisummary.infrastructure.knowledge.indexing.parse;
+package com.item.aisummary.infrastructure.knowledge.indexing.parse.support;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;

@@ -73,7 +73,7 @@ CONTEXT 必须无父；RETRIEVAL 可独立存在或引用同版本的无父 CONT
 
 ### 严格解码与受控预处理（`Utf8TextDecoder`）
 
-TXT 与 Markdown 解析器均委托 package-private `Utf8TextDecoder` 执行统一的受控字节解码：
+解析实现位于 `infrastructure.knowledge.indexing.parse`，按 `txt`、`markdown`、`docx`、`pdf` 分包。TXT 与 Markdown 解析器均委托 `support.Utf8TextDecoder` 执行统一的受控字节解码；该支持类及解码入口公开，供两个格式子包复用：
 
 - **严格 UTF-8 校验**：使用 `CharsetDecoder`（`REPORT` 模式），拒绝非法或截断的 UTF-8，并拒绝 NUL 字符。不自动猜测或转换 GBK/UTF-16；不同编码可能共享合法字节，因此不声称能识别所有源编码。失败异常使用固定安全文案，不回显源正文或文件名。
 - **BOM 与换行符统一**：若文本开头包含至多一个 UTF-8 BOM（`\uFEFF`）则予以剥离；正文所有换行符（CRLF、CR）统一规范化为 LF（`\n`），正文其余字符原样保留。

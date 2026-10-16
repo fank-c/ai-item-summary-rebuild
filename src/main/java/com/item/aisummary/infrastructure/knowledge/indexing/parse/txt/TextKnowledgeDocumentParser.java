@@ -1,4 +1,4 @@
-package com.item.aisummary.infrastructure.knowledge.indexing.parse;
+package com.item.aisummary.infrastructure.knowledge.indexing.parse.txt;
 
 import com.item.aisummary.application.knowledge.indexing.parse.ContentBlock;
 import com.item.aisummary.application.knowledge.indexing.parse.ContentBlockType;
@@ -7,6 +7,7 @@ import com.item.aisummary.application.knowledge.indexing.parse.ParsedDocument;
 import com.item.aisummary.application.knowledge.indexing.source.FileFormat;
 import com.item.aisummary.application.knowledge.indexing.source.PreparedSource;
 import com.item.aisummary.domain.knowledge.value.SourceLocation;
+import com.item.aisummary.infrastructure.knowledge.indexing.parse.support.Utf8TextDecoder;
 import java.util.ArrayList;
 import java.util.List;
 

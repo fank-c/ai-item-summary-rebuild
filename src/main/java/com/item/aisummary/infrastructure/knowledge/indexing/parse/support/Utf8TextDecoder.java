@@ -1,4 +1,4 @@
-package com.item.aisummary.infrastructure.knowledge.indexing.parse;
+package com.item.aisummary.infrastructure.knowledge.indexing.parse.support;
 
 import com.item.aisummary.application.knowledge.indexing.source.FileFormat;
 import com.item.aisummary.application.knowledge.indexing.source.PreparedSource;
@@ -14,7 +14,7 @@ import java.nio.charset.StandardCharsets;
 /**
  * 文本格式解析共用的受控 UTF-8 解码工具。
  *
- * <p>为 TXT 与 Markdown 等基于文本的文档格式解析器提供严格的 UTF-8 字符集校验与换行符规整：
+ * <p>作为解析基础设施内部的跨格式支持能力，供 TXT 与 Markdown 子包调用，提供严格的 UTF-8 字符集校验与换行符规整：
  * <ul>
  *   <li>使用配置为 REPORT 模式的 {@link CharsetDecoder}，拒绝畸形或截断的 UTF-8 字节；不猜测或转换其他编码。</li>
  *   <li>源文件内存流在 {@code try-with-resources} 块中管理，确保流资源在成功与失败路径均被正确关闭。</li>
@@ -23,12 +23,12 @@ import java.nio.charset.StandardCharsets;
  *   <li>移除开头至多一个 UTF-8 BOM（{@code \uFEFF}），将正文所有换行统一为 LF（{@code \n}），正文其余字符原样保留。</li>
  * </ul>
  */
-final class Utf8TextDecoder {
+public final class Utf8TextDecoder {
     /**
      * 单个文本解析文档允许输出的最大内容块数量安全预算。
      * 为 TXT 与 Markdown 解析器共用；常量非可调策略参数。
      */
-    static final int MAX_BLOCKS = 100_000;
+    public static final int MAX_BLOCKS = 100_000;
 
     private Utf8TextDecoder() {}
 
@@ -41,7 +41,7 @@ final class Utf8TextDecoder {
      * @return 规整后的 UTF-8 文本内容
      * @throws IllegalArgumentException 当源参数非法、格式不匹配、大小超限或 UTF-8 解码失败时抛出
      */
-    static String decode(PreparedSource source, FileFormat expectedFormat, long maxSourceSize) {
+    public static String decode(PreparedSource source, FileFormat expectedFormat, long maxSourceSize) {
         if (maxSourceSize < 1 || maxSourceSize >= Integer.MAX_VALUE) {
             throw new IllegalArgumentException("源文件大小上限必须为正且小于 Integer.MAX_VALUE 字节");
         }

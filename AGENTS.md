@@ -71,7 +71,7 @@ src/main/java/com/item/aisummary/
     ├── knowledge/
     │   ├── config/    # 基础 KnowledgeConfiguration
     │   ├── persistence/ # 四表 MyBatis 持久化及类型处理
-    │   └── indexing/  # config（RAG 条件配置、KnowledgeParserConfiguration、KnowledgeChunkerConfiguration、DocMindParserConfiguration、Properties）、parse（TXT/MD/DOCX 解析器、DocMind PDF 适配及 Utf8TextDecoder）、chunk（TokenBudgetKnowledgeChunker、JTokkitTokenBudget、SourceMappedText、TokenRangeSplitter）、vector（Spring AI 适配）
+    │   └── indexing/  # config（RAG 条件配置、KnowledgeParserConfiguration、KnowledgeChunkerConfiguration、DocMindParserConfiguration、Properties）、parse（按 txt/markdown/docx/pdf 分包，support 放共用 Utf8TextDecoder）、chunk（TokenBudgetKnowledgeChunker、JTokkitTokenBudget、SourceMappedText、TokenRangeSplitter）、vector（Spring AI 适配）
     ├── persistence/   # 共享 UTC typehandler
     ├── time/          # 共享 UTC Clock 装配
     ├── security/      # BCrypt 摘要适配

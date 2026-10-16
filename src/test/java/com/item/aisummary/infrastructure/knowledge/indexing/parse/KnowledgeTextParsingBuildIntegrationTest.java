@@ -37,6 +37,8 @@ import com.item.aisummary.domain.knowledge.enums.RevisionStatus;
 import com.item.aisummary.domain.knowledge.model.KnowledgeChunk;
 import com.item.aisummary.domain.knowledge.model.KnowledgeDocument;
 import com.item.aisummary.domain.knowledge.model.KnowledgeDocumentRevision;
+import com.item.aisummary.infrastructure.knowledge.indexing.parse.markdown.MarkdownKnowledgeDocumentParser;
+import com.item.aisummary.infrastructure.knowledge.indexing.parse.txt.TextKnowledgeDocumentParser;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

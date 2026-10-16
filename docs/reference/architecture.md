@@ -39,7 +39,7 @@ flowchart LR
 
 `indexing` 各组不再增加 service/port/model 子层。组 writer 将父子分组转换为基础 `SaveKnowledgeChunkCommand`，调用基础 `KnowledgeChunkService`；基础服务不反向依赖 indexing。
 
-对应基础设施位于 `infrastructure.knowledge.indexing/{config,parse,chunk,vector}`。知识库基础装配和四表持久化保留在 `infrastructure.knowledge/{config,persistence}`。测试跟随主要被测类的生产包结构；仅为已有职责创建包。
+对应基础设施位于 `infrastructure.knowledge.indexing/{config,parse,chunk,vector}`。其中 `parse` 按 `txt / markdown / docx / pdf` 格式分包，共用 UTF-8 解码能力位于 `parse.support`。知识库基础装配和四表持久化保留在 `infrastructure.knowledge/{config,persistence}`。测试跟随主要被测类的生产包结构；仅为已有职责创建包。
 
 ## 请求身份与用户引用
 
