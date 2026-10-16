@@ -43,7 +43,8 @@ public class FileService implements FileContentService {
     /**
      * 将调用方提供的文件内容上传到指定存储，并登记已完成的文件元数据。
      *
-     * <p>先校验显式身份、声明大小、文件名、扩展名、MIME 和存储类型，再生成并检查对象 Key。 第一次完整读流核对实际字节数并计算 SHA-256；第二次重开内容，使用实际大小上传。
+     * <p>先校验显式身份、声明大小、文件名、扩展名、MIME 和存储类型，将厂商目录叠加在公共目录前，生成并检查完整对象 Key。
+     * 第一次完整读流核对实际字节数并计算 SHA-256；第二次重开内容，使用实际大小上传。
      * 两次流均由本方法关闭，来源必须保证重开后内容不变，本服务不缓存全文或二次核对摘要。
      *
      * <p>对象上传成功后才插入 status=1、uploadStatus=completed 的记录，所有者和审计用户 均取未经裁剪的
@@ -73,8 +74,13 @@ public class FileService implements FileContentService {
         ObjectStorageRouter.StorageTarget target = storage.resolve(storageType);
         Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
 
-        // 新 Key 的字符和字节预算在首次读流前检查，避免上传后才被存储或数据库拒绝。
-        String key = FileRules.objectKey(policy.keyPrefix(), name, now);
+        // 厂商项目目录只用于新上传；完整 Key 入库，后续操作不再拼接当前配置的目录。
+        String prefix =
+                target.keyPrefix().isEmpty()
+                        ? policy.keyPrefix()
+                        : target.keyPrefix() + "/" + policy.keyPrefix();
+        // 包含项目目录的完整 Key 在首次读流前检查字符和字节预算。
+        String key = FileRules.objectKey(prefix, name, now);
         Digest digest = digest(source);
 
         // 来源合同保证可以重开相同内容；上传使用第一遍读取到的实际大小和摘要。

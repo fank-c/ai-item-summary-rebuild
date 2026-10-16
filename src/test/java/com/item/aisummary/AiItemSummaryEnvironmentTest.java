@@ -62,6 +62,7 @@ class AiItemSummaryEnvironmentTest {
             MINIO_ACCESS_KEY=fixture-access
             MINIO_SECRET_KEY=fixture-secret
             ALIYUN_OSS_ENABLED=true
+            ALIYUN_OSS_KEY_PREFIX=/item/fixture-project/
             ALIYUN_OSS_ENDPOINT=https://oss-cn-hangzhou.aliyuncs.com
             ALIYUN_OSS_BUCKET=fixture-bucket
             ALIYUN_OSS_ACCESS_KEY_ID=fixture-access
@@ -108,18 +109,21 @@ class AiItemSummaryEnvironmentTest {
         assertThat(values.getProperty("app.file.storage.minio.endpoint")).isEqualTo("http://127.0.0.1:19000");
         assertThat(values.getProperty("app.file.storage.minio.secret-key")).isEqualTo("fixture-secret");
         assertThat(values.getProperty("app.file.storage.aliyun.enabled")).isEqualTo("true");
+        assertThat(values.getProperty("app.file.storage.aliyun.key-prefix")).isEqualTo("/item/fixture-project/");
         assertThat(values.getProperty("app.file.storage.aliyun.access-key-secret")).isEqualTo("fixture-secret");
     }
 
     @Test
     void processEnvironmentOverridesLocalFile() throws Exception {
         Files.writeString(workingDirectory.resolve(".env"),
-            "SERVER_PORT=9081\nDB_USERNAME=local-user\nAPP_FILE_MAX_PART_HEADER_SIZE=5KB\n");
+            "SERVER_PORT=9081\nDB_USERNAME=local-user\nAPP_FILE_MAX_PART_HEADER_SIZE=5KB\nALIYUN_OSS_KEY_PREFIX=item/local-project\n");
         Properties values = probe("src/main/resources/application.yml",
-            Map.of("SERVER_PORT", "9082", "DB_USERNAME", "process-user", "APP_FILE_MAX_PART_HEADER_SIZE", "6KB"));
+            Map.of("SERVER_PORT", "9082", "DB_USERNAME", "process-user", "APP_FILE_MAX_PART_HEADER_SIZE", "6KB",
+                "ALIYUN_OSS_KEY_PREFIX", "item/process-project"));
         assertThat(values.getProperty("server.port")).isEqualTo("9082");
         assertThat(values.getProperty("spring.datasource.username")).isEqualTo("process-user");
         assertThat(values.getProperty("server.tomcat.max-part-header-size")).isEqualTo("6KB");
+        assertThat(values.getProperty("app.file.storage.aliyun.key-prefix")).isEqualTo("item/process-project");
     }
 
     @Test
@@ -127,9 +131,12 @@ class AiItemSummaryEnvironmentTest {
         Files.writeString(workingDirectory.resolve(".env"), "SERVER_PORT=9081\n");
         Properties values = probe("src/main/resources/application.yml",
             Map.of("SERVER_PORT", "9082", "APP_FILE_MAX_PART_HEADER_SIZE", "6KB"),
-            "--server.port=9083", "--server.tomcat.max-part-header-size=7KB");
+            "--server.port=9083", "--server.tomcat.max-part-header-size=7KB",
+            "--spring.application.name=renamed-project");
         assertThat(values.getProperty("server.port")).isEqualTo("9083");
         assertThat(values.getProperty("server.tomcat.max-part-header-size")).isEqualTo("7KB");
+        // 未单独指定 OSS 项目目录时，默认值跟随应用名称。
+        assertThat(values.getProperty("app.file.storage.aliyun.key-prefix")).isEqualTo("item/renamed-project");
     }
 
     @Test
@@ -146,6 +153,7 @@ class AiItemSummaryEnvironmentTest {
         assertThat(values.getProperty("spring.ai.openai.api-key")).isEmpty();
         assertThat(values.getProperty("app.file.storage.minio.enabled")).isEqualTo("false");
         assertThat(values.getProperty("app.file.storage.aliyun.enabled")).isEqualTo("false");
+        assertThat(values.getProperty("app.file.storage.aliyun.key-prefix")).isEqualTo("item/ai-item-summary");
     }
 
     @Test
@@ -221,7 +229,7 @@ class AiItemSummaryEnvironmentTest {
                     "app.file.storage.download-url-expiration",
                     "app.file.storage.minio.enabled", "app.file.storage.minio.endpoint",
                     "app.file.storage.minio.secret-key", "app.file.storage.aliyun.enabled",
-                    "app.file.storage.aliyun.access-key-secret")) {
+                    "app.file.storage.aliyun.key-prefix", "app.file.storage.aliyun.access-key-secret")) {
                 values.setProperty(key, environment.getProperty(key, "<unset>"));
             }
             try (var writer = Files.newBufferedWriter(Path.of(environment.getRequiredProperty("probe.output")),

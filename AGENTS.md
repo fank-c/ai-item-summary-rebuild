@@ -249,7 +249,7 @@ OPENAI_MODEL=<model-name>
 - HTTP 固定三个接口：POST `/api/files?storageType=minio|aliyun`、GET `/api/files/{fileId}/download-url`、DELETE `/api/files/{fileId}`。没有详情或列表 GET，Location 只标识资源。
 - 上传响应固定 `id/originName/mime/size/uploadStatus/createAt/updateAt`；新上传 uploadStatus=completed，不公开存储位置、摘要或所有者。
 - 身份来自请求上下文或内部显式 actorUserId；所有文件服务入口先校验非空及最多 64 个 Unicode 码点，再执行查询、读流或存储操作。内部 ID 不裁剪、转大小写或截断。create_by 为所有者，不查询用户表。未删除、status=1、completed 且归属匹配才可下载、删除或读取；失败统一 404，无身份 401，超长内部 ID 抛 IllegalArgumentException，经 HTTP 传播时为 400 REQUEST_VALIDATION_ERROR。
-- 先完整读取实际字节并计算 SHA-256，再重开相同内容上传。默认 20MB、txt/md/pdf/docx，不识别内容格式。Bucket 只取配置，新 Key 使用 `{prefix}/{yyyy/MM/dd}/{UUID}.{小写扩展名}`，原名完整保存在 originName，不拼入 Key、不截断。
+- 先完整读取实际字节并计算 SHA-256，再重开相同内容上传。默认 20MB、txt/md/pdf/docx，不识别内容格式。Bucket 只取配置，MinIO 新 Key 使用 `{prefix}/{yyyy/MM/dd}/{UUID}.{小写扩展名}`；OSS 在此前叠加 `ALIYUN_OSS_KEY_PREFIX` 项目目录，默认 `item/${spring.application.name}`（当前 `item/ai-item-summary`）。两项前缀分别规范化，完整 Key 不以 `/` 开头、统一校验预算并入库；历史 Key 读取、签名、删除不补项目前缀，修改配置不搬迁旧对象。原名完整保存在 originName，不拼入 Key、不截断。
 - 文件名和规范化 MIME 最多 255 字符；Key 保留 512 的 String.length() 上限，新生成的 Key 另限制 UTF-8 总字节不超过 1023，每个 `/` 分隔的路径段不超过 255 个 UTF-8 字节。总预算兼顾两个存储，单段预算避免 MinIO 对长段拒绝；在首次读流前检查，超限为 400 FILE_VALIDATION_ERROR。多级前缀逐段检查，原名不进入 Key、不截断。历史 Key 的下载、删除和内部读取不重新生成或套用新上传检查。扩展名忽略大小写，新 Key 扩展名小写，MIME 去参数并转小写，空 MIME 使用 application/octet-stream。
 - 存储类型必须对应已启用适配器，不自动回退。默认两个厂商关闭，无存储凭据仍可启动；已启用时缺 endpoint、bucket 或凭据拒绝启动。
 - 适配器直接调用 SDK，只保留上传、读取流、GET 签名、删除；不引入 ResilienceExecutor、重试策略、HEAD 核对、直传和异步任务。
@@ -278,6 +278,7 @@ OPENAI_MODEL=<model-name>
 | `MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY` | 空，启用时必填，本地提供 |
 | `MINIO_PATH_STYLE_ACCESS` | `true` |
 | `ALIYUN_OSS_ENABLED` | `false` |
+| `ALIYUN_OSS_KEY_PREFIX` | `item/${spring.application.name}`，当前为 `item/ai-item-summary`；仅新上传叠加在公共前缀前，启用时规范化后 1～150 字符，完整 Key 统一校验字符及 UTF-8 字节预算 |
 | `ALIYUN_OSS_ENDPOINT`、`ALIYUN_OSS_BUCKET` | 空，启用时必填 |
 | `ALIYUN_OSS_ACCESS_KEY_ID`、`ALIYUN_OSS_ACCESS_KEY_SECRET` | 空，启用时必填，本地提供 |
 

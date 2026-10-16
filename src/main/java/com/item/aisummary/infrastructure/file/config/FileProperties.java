@@ -50,19 +50,8 @@ public record FileProperties(
             /** 阿里云 OSS 连接配置。 */
             @DefaultValue Aliyun aliyun) {
         public Storage {
-            // 只规范化配置前缀；完整 Key 的 UTF-8 字节预算在新上传时检查。
-            if (keyPrefix == null) {
-                throw new IllegalArgumentException("对象 Key 前缀不能为空");
-            }
-            keyPrefix =
-                    keyPrefix
-                            .trim()
-                            .replace('\\', '/')
-                            .replace("..", "_")
-                            .replaceAll("^/+|/+$", "");
-            if (keyPrefix.isBlank() || keyPrefix.length() > 150) {
-                throw new IllegalArgumentException("对象 Key 前缀长度不合法");
-            }
+            // 公共目录与厂商目录分别规范化，完整 Key 的字节预算在新上传时统一检查。
+            keyPrefix = normalizeKeyPrefix(keyPrefix);
             if (downloadUrlExpiration == null
                     || downloadUrlExpiration.getNano() != 0
                     || downloadUrlExpiration.getSeconds() < 1
@@ -116,13 +105,16 @@ public record FileProperties(
             /** 阿里云 AccessKey ID。 */
             String accessKeyId,
             /** 阿里云 AccessKey Secret；禁止写入日志。 */
-            String accessKeySecret) {
+            String accessKeySecret,
+            /** OSS 项目目录，叠加在公共文件目录前；主配置默认按 Spring 应用名称生成。 */
+            @DefaultValue("item/ai-item-summary") String keyPrefix) {
         public Aliyun {
             if (enabled) {
                 FileProperties.endpoint(endpoint);
                 required(bucket);
                 required(accessKeyId);
                 required(accessKeySecret);
+                keyPrefix = normalizeKeyPrefix(keyPrefix);
             }
         }
 
@@ -146,6 +138,19 @@ public record FileProperties(
             throw new IllegalArgumentException("SDK 超时超出范围");
         }
         return (int) millis;
+    }
+
+    /** 规范化服务端目录，去掉首尾斜杠；每项配置最多 150 字符，最终 Key 另做统一预算校验。 */
+    private static String normalizeKeyPrefix(String value) {
+        if (value == null) {
+            throw new IllegalArgumentException("对象 Key 前缀不能为空");
+        }
+        String normalized =
+                value.trim().replace('\\', '/').replace("..", "_").replaceAll("^/+|/+$", "");
+        if (normalized.isBlank() || normalized.length() > 150) {
+            throw new IllegalArgumentException("对象 Key 前缀长度不合法");
+        }
+        return normalized;
     }
 
     private static void required(String value) {

@@ -21,7 +21,7 @@ public final class ConfiguredStorageRouter implements ObjectStorageRouter {
      * 根据请求的存储类型路由到已启用的存储适配器。
      *
      * @param type 存储类型（"minio" 或 "aliyun"）
-     * @return 目标存储桶与客户端
+     * @return 目标存储桶、客户端和新上传专用目录；OSS 使用项目目录，MinIO 无额外目录
      * @throws FileValidationException 存储类型非法或目标存储未启用
      */
     @Override
@@ -31,7 +31,8 @@ public final class ConfiguredStorageRouter implements ObjectStorageRouter {
             return new StorageTarget(config.minio().bucket(), clients.get("minio"));
         }
         if ("aliyun".equals(type) && config.aliyun().enabled() && clients.containsKey("aliyun")) {
-            return new StorageTarget(config.aliyun().bucket(), clients.get("aliyun"));
+            return new StorageTarget(
+                    config.aliyun().bucket(), clients.get("aliyun"), config.aliyun().keyPrefix());
         }
         throw new FileValidationException("文件存储类型不合法或未启用");
     }

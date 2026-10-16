@@ -38,9 +38,46 @@ class FileConfigurationTest {
             "app.file.storage.aliyun.access-key-secret=test-secret")
             .run(context -> {
                 assertThat(context).hasSingleBean(ObjectStorageClient.class);
-                assertThat(context.getBean(ObjectStorageRouter.class).resolve("aliyun").bucket()).isEqualTo("test-bucket");
+                var target = context.getBean(ObjectStorageRouter.class).resolve("aliyun");
+                assertThat(target.bucket()).isEqualTo("test-bucket");
+                assertThat(target.keyPrefix()).isEqualTo("item/ai-item-summary");
             });
     }
+    /** OSS 项目目录由服务端配置，去掉首尾斜杠后再叠加公共文件目录。 */
+    @Test void aliyunPrefixIsNormalizedWithoutChangingMinioPrefix() {
+        runner.withPropertyValues(
+            "app.file.storage.aliyun.enabled=true",
+            "app.file.storage.aliyun.endpoint=https://oss-cn-hangzhou.aliyuncs.com",
+            "app.file.storage.aliyun.bucket=test-bucket",
+            "app.file.storage.aliyun.access-key-id=test-access",
+            "app.file.storage.aliyun.access-key-secret=test-secret",
+            "app.file.storage.aliyun.key-prefix= /item/custom-project/ ",
+            "app.file.storage.minio.enabled=true",
+            "app.file.storage.minio.endpoint=http://127.0.0.1:19000",
+            "app.file.storage.minio.bucket=minio-bucket",
+            "app.file.storage.minio.access-key=test-access",
+            "app.file.storage.minio.secret-key=test-secret")
+            .run(context -> {
+                var router = context.getBean(ObjectStorageRouter.class);
+                assertThat(router.resolve("aliyun").keyPrefix()).isEqualTo("item/custom-project");
+                assertThat(router.resolve("minio").keyPrefix()).isEmpty();
+            });
+    }
+
+    /** 项目目录不能空白或超过配置字符上限，启用 OSS 时必须在启动阶段拒绝。 */
+    @Test void enabledAliyunRejectsInvalidProjectPrefixes() {
+        for (String prefix : new String[] {"/", " ", "a".repeat(151)}) {
+            runner.withPropertyValues(
+                "app.file.storage.aliyun.enabled=true",
+                "app.file.storage.aliyun.endpoint=https://oss-cn-hangzhou.aliyuncs.com",
+                "app.file.storage.aliyun.bucket=test-bucket",
+                "app.file.storage.aliyun.access-key-id=test-access",
+                "app.file.storage.aliyun.access-key-secret=test-secret",
+                "app.file.storage.aliyun.key-prefix=" + prefix)
+                .run(context -> assertThat(context).hasFailed());
+        }
+    }
+
     @Test void enabledIncompleteStorageAndUnsupportedTimeoutsFailAtStartup() {
         for (String value : new String[] {"app.file.storage.minio.enabled=true", "app.file.storage.aliyun.enabled=true",
                 "app.file.storage.download-url-expiration=0s", "app.file.storage.download-url-expiration=8d",

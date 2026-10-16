@@ -145,7 +145,7 @@ Unicode 码点指一个完整 Unicode 字符，补充平面字符计为 1。模�
 
 扩展名白名单当前在主配置中固定为 `txt`、`md`、`pdf`、`docx`，没有对应环境变量。校验不识别真实文件格式。
 
-新 Key 使用 `{prefix}/{yyyy/MM/dd}/{UUID}.{小写扩展名}`，原始展示名称完整保存在元数据中，不进入 Key，也不截断。新 Key 同时限制 `String.length()` 不超过 512、UTF-8 总字节不超过 1023、每个 `/` 分隔的路径段不超过 255 个 UTF-8 字节。长多字节前缀需逐段符合预算，超限在首次读流前拒绝；历史 Key 仍按记录值下载、删除与读取，不重新校验。
+MinIO 新 Key 使用 `{prefix}/{yyyy/MM/dd}/{UUID}.{小写扩展名}`；OSS 在此前叠加项目目录，默认是 `item/ai-item-summary/{prefix}/{yyyy/MM/dd}/{UUID}.{小写扩展名}`。公共 `{prefix}` 取 `FILE_STORAGE_KEY_PREFIX`（默认 `files`），OSS 项目目录取 `ALIYUN_OSS_KEY_PREFIX`，去掉首尾斜杠后拼接，完整 Key 不以 `/` 开头并保存到数据库。原始展示名称完整保存在元数据中，不进入 Key，也不截断。新 Key 同时限制 `String.length()` 不超过 512、UTF-8 总字节不超过 1023、每个 `/` 分隔的路径段不超过 255 个 UTF-8 字节。长多字节前缀需逐段符合预算，超限在首次读流前拒绝；历史 Key 仍按记录值下载、删除与读取，不重新校验。
 
 multipart 的单文件、整个请求和单个 part 头部是三种独立限制。默认 4KB part 头部预算兼顾合法长文件名与 MIME；减小该值可能让文件名尚未进入业务校验就返回 413，413 不仅表示文件正文超限。`APP_FILE_MAX_PART_HEADER_SIZE` 应保留正的有限大小，不以关闭限制替代文件名校验。下载 URL 的末段是 UUID 与扩展名，客户端需使用上传响应的 `originName` 显示或保存原始名称；当前不额外设置下载 Content-Disposition。
 
@@ -168,10 +168,13 @@ SDK 超时须为正整数毫秒，且不超过 `Integer.MAX_VALUE` 毫秒；不�
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `ALIYUN_OSS_ENABLED` | `false` | 是否启用 |
+| `ALIYUN_OSS_KEY_PREFIX` | `item/${spring.application.name}`（当前 `item/ai-item-summary`） | 仅新上传使用的 OSS 项目目录；叠加在公共前缀前，启用时规范化后 1～150 字符，完整 Key 仍受字符与字节预算约束 |
 | `ALIYUN_OSS_ENDPOINT` | 空 | 启用时必填的 HTTP / HTTPS 服务地址 |
 | `ALIYUN_OSS_BUCKET` | 空 | 启用时必填，Bucket 事先创建 |
 | `ALIYUN_OSS_ACCESS_KEY_ID` | 空 | 启用时必填 |
 | `ALIYUN_OSS_ACCESS_KEY_SECRET` | 空 | 启用时必填 |
+
+`ALIYUN_OSS_KEY_PREFIX` 未显式设置时随 Spring 应用名称变化；例如公共前缀是 `files` 时，新 OSS Key 为 `item/ai-item-summary/files/年/月/日/UUID.扩展名`。项目目录只在上传时叠加，修改配置不会搬迁旧对象，旧文件仍按已存 Key 下载、读取和删除。
 
 两个厂商默认关闭；选择未启用的类型不会自动回退。启用时缺少 endpoint、bucket 或凭据会拒绝启动。配置校验不检查真实凭据是否可用，也不创建 Bucket。
 

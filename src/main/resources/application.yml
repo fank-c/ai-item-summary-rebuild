@@ -85,6 +85,8 @@ app:
         path-style-access: ${MINIO_PATH_STYLE_ACCESS:true}
       aliyun:
         enabled: ${ALIYUN_OSS_ENABLED:false}
+        # OSS 项目目录叠加在公共 key-prefix 前，完整 Key 不以斜杠开头。
+        key-prefix: ${ALIYUN_OSS_KEY_PREFIX:item/${spring.application.name}}
         endpoint: ${ALIYUN_OSS_ENDPOINT:}
         bucket: ${ALIYUN_OSS_BUCKET:}
         access-key-id: ${ALIYUN_OSS_ACCESS_KEY_ID:}

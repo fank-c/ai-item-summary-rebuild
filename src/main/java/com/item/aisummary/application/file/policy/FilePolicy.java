@@ -9,7 +9,7 @@ public record FilePolicy(
         long maxBytes,
         /** 文件名扩展名白名单，比较时忽略大小写。 */
         Set<String> allowedExtensions,
-        /** 新对象 Key 使用的路径前缀。 */
+        /** 新对象 Key 的公共文件目录；厂商专用目录存在时叠加在此前。 */
         String keyPrefix,
         /** 下载临时凭证的有效期。 */
         Duration downloadExpiration) {

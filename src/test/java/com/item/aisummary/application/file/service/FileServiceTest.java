@@ -138,6 +138,25 @@ class FileServiceTest {
         assertThat(storage.objects).isEmpty();
     }
 
+    /** 厂商项目目录也计入完整 Key 的预算，超限必须在首次开流和数据库写入前失败。 */
+    @Test void invalidStoragePrefixIsRejectedBeforeOpeningSource() throws IOException {
+        ObjectStorageRouter router = mock(ObjectStorageRouter.class);
+        when(router.resolve("aliyun")).thenReturn(
+            new ObjectStorageRouter.StorageTarget("test-bucket", storage, "item/" + "中".repeat(86)));
+        UploadSource input = mock(UploadSource.class);
+        when(input.declaredSize()).thenReturn(1L);
+        when(input.originalName()).thenReturn("a.txt");
+        FileService guarded = new FileService(repository, router,
+            new FilePolicy(4, Set.of("txt"), "files", Duration.ofMinutes(15)));
+
+        assertThatThrownBy(() -> guarded.upload("owner", "aliyun", input))
+            .isInstanceOf(FileValidationException.class)
+            .hasMessage("对象 Key 的单个路径段不能超过 255 个 UTF-8 字节");
+        verify(input, never()).openStream();
+        verifyNoInteractions(repository);
+        assertThat(storage.objects).isEmpty();
+    }
+
     private static UploadSource source(long declared, String text, AtomicInteger closes) {
         return new UploadSource() {
             public String originalName() { return "a.txt"; }
