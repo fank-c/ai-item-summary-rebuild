@@ -32,6 +32,14 @@ class AiItemSummaryEnvironmentTest {
             OPENAI_API_KEY=fixture-key
             OPENAI_MODEL=fixture-model
             APP_KNOWLEDGE_RAG_ENABLED=true
+            APP_KNOWLEDGE_DOCMIND_ENABLED=true
+            ALIYUN_DOCMIND_ACCESS_KEY_ID=fixture-docmind-id
+            ALIYUN_DOCMIND_ACCESS_KEY_SECRET=fixture-docmind-secret
+            ALIYUN_DOCMIND_ENDPOINT=docmind-fixture.example
+            ALIYUN_DOCMIND_VLM_ENHANCEMENT=false
+            ALIYUN_DOCMIND_FORMULA_ENHANCEMENT=true
+            ALIYUN_DOCMIND_WAIT_TIMEOUT=300s
+            ALIYUN_DOCMIND_POLL_INTERVAL=1s
             SPRING_AI_MODEL_EMBEDDING=openai
             SPRING_AI_VECTORSTORE_TYPE=qdrant
             OPENAI_EMBEDDING_API_KEY=fixture-embedding-key
@@ -81,6 +89,14 @@ class AiItemSummaryEnvironmentTest {
         assertThat(values.getProperty("spring.ai.model.embedding")).isEqualTo("openai");
         assertThat(values.getProperty("spring.ai.vectorstore.type")).isEqualTo("qdrant");
         assertThat(values.getProperty("app.knowledge.rag.enabled")).isEqualTo("true");
+        assertThat(values.getProperty("app.knowledge.rag.docmind.enabled")).isEqualTo("true");
+        assertThat(values.getProperty("app.knowledge.rag.docmind.access-key-id")).isEqualTo("fixture-docmind-id");
+        assertThat(values.getProperty("app.knowledge.rag.docmind.access-key-secret")).isEqualTo("fixture-docmind-secret");
+        assertThat(values.getProperty("app.knowledge.rag.docmind.endpoint")).isEqualTo("docmind-fixture.example");
+        assertThat(values.getProperty("app.knowledge.rag.docmind.vlm-enhancement")).isEqualTo("false");
+        assertThat(values.getProperty("app.knowledge.rag.docmind.formula-enhancement")).isEqualTo("true");
+        assertThat(values.getProperty("app.knowledge.rag.docmind.wait-timeout")).isEqualTo("300s");
+        assertThat(values.getProperty("app.knowledge.rag.docmind.poll-interval")).isEqualTo("1s");
         assertThat(values.getProperty("spring.ai.openai.embedding.api-key")).isEqualTo("fixture-embedding-key");
         assertThat(values.getProperty("spring.ai.openai.embedding.model")).isEqualTo("fixture-embedding-model");
         assertThat(values.getProperty("spring.ai.openai.embedding.dimensions")).isEqualTo("256");
@@ -149,6 +165,11 @@ class AiItemSummaryEnvironmentTest {
         assertThat(values.getProperty("spring.ai.model.embedding")).isEqualTo("none");
         assertThat(values.getProperty("spring.ai.vectorstore.type")).isEqualTo("none");
         assertThat(values.getProperty("app.knowledge.rag.enabled")).isEqualTo("false");
+        assertThat(values.getProperty("app.knowledge.rag.docmind.enabled")).isEqualTo("false");
+        assertThat(values.getProperty("app.knowledge.rag.docmind.access-key-id")).isEmpty();
+        assertThat(values.getProperty("app.knowledge.rag.docmind.access-key-secret")).isEmpty();
+        assertThat(values.getProperty("app.knowledge.rag.docmind.vlm-enhancement")).isEqualTo("true");
+        assertThat(values.getProperty("app.knowledge.rag.docmind.formula-enhancement")).isEqualTo("false");
         assertThat(values.getProperty("server.tomcat.max-part-header-size")).isEqualTo("4KB");
         assertThat(values.getProperty("spring.ai.openai.api-key")).isEmpty();
         assertThat(values.getProperty("app.file.storage.minio.enabled")).isEqualTo("false");
@@ -191,7 +212,7 @@ class AiItemSummaryEnvironmentTest {
             .redirectErrorStream(true).redirectOutput(log.toFile());
         // 不继承开发者的服务开关、凭据、配置位置或 Java 注入参数。
         builder.environment().keySet().removeIf(key -> key.matches(
-            "(?i)(DB_.*|OPENAI_.*|QDRANT_.*|RAG_.*|MINIO_.*|ALIYUN_OSS_.*|FILE_STORAGE_.*|APP_.*|USER_TEST_DB_.*|SPRING_.*|SERVER_PORT|JAVA_TOOL_OPTIONS|JDK_JAVA_OPTIONS|_JAVA_OPTIONS)"));
+            "(?i)(DB_.*|OPENAI_.*|QDRANT_.*|RAG_.*|MINIO_.*|ALIYUN_OSS_.*|ALIYUN_DOCMIND_.*|FILE_STORAGE_.*|APP_.*|USER_TEST_DB_.*|SPRING_.*|SERVER_PORT|JAVA_TOOL_OPTIONS|JDK_JAVA_OPTIONS|_JAVA_OPTIONS)"));
         builder.environment().putAll(variables);
         Process process = builder.start();
         try {
@@ -223,6 +244,10 @@ class AiItemSummaryEnvironmentTest {
                     "app.knowledge.rag.batch-size", "app.knowledge.rag.chunk-size", "app.knowledge.rag.min-chunk-size-chars",
                     "app.knowledge.rag.min-chunk-length-to-embed", "app.knowledge.rag.max-num-chunks", "app.knowledge.rag.keep-separator",
                     "app.knowledge.rag.punctuation-marks", "app.knowledge.rag.max-source-size",
+                    "app.knowledge.rag.docmind.enabled", "app.knowledge.rag.docmind.access-key-id",
+                    "app.knowledge.rag.docmind.access-key-secret", "app.knowledge.rag.docmind.endpoint",
+                    "app.knowledge.rag.docmind.vlm-enhancement", "app.knowledge.rag.docmind.formula-enhancement",
+                    "app.knowledge.rag.docmind.wait-timeout", "app.knowledge.rag.docmind.poll-interval",
                     "spring.ai.openai.chat.model", "app.auth.mock.user-id", "app.auth.mock.username",
                     "app.file.upload.max-size", "spring.servlet.multipart.max-file-size",
                     "spring.servlet.multipart.max-request-size", "server.tomcat.max-part-header-size",

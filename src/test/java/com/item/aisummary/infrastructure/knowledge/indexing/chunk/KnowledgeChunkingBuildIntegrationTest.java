@@ -20,6 +20,10 @@ import com.item.aisummary.application.knowledge.indexing.chunk.ChunkingOptions;
 import com.item.aisummary.application.knowledge.indexing.chunk.KnowledgeChunkGroupWriter;
 import com.item.aisummary.application.knowledge.indexing.source.KnowledgeSourceReader;
 import com.item.aisummary.infrastructure.knowledge.indexing.parse.docx.DocxKnowledgeDocumentParser;
+import com.item.aisummary.infrastructure.knowledge.indexing.parse.pdf.AlibabaPdfKnowledgeDocumentParser;
+import com.item.aisummary.infrastructure.knowledge.indexing.parse.pdf.DocMindPdfParser;
+import com.item.aisummary.infrastructure.knowledge.indexing.parse.pdf.DocMindPdfParser.Layout;
+import com.item.aisummary.infrastructure.knowledge.indexing.parse.pdf.DocMindPdfParser.Result;
 import com.item.aisummary.application.knowledge.indexing.vector.KnowledgeVectorEntry;
 import com.item.aisummary.application.knowledge.indexing.vector.KnowledgeVectorIndex;
 import com.item.aisummary.application.knowledge.port.KnowledgeChunkRepository;
@@ -49,6 +53,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -147,6 +153,32 @@ class KnowledgeChunkingBuildIntegrationTest {
     }
 
     /**
+     * 验证已发布活动的 PDF 文档在触发二次重建时，若云端解析步骤失败，必须完整保留旧活动版本的 MySQL 片段、活动指针与派生向量。
+     */
+    @Test
+    void failedPdfRebuildPreservesOldActiveRevisionAndItsVectors() throws Exception {
+        clearDatabase();
+        fixture.configureBytes("fixture.pdf", pdfBytes(), "application/pdf");
+        createDocument();
+        var first = builds.build("owner", documentId, ChunkingMode.PARENT_CHILD);
+        var oldChunks = chunks.findByRevisionId(first.revisionId());
+        var oldVectors = List.copyOf(fixture.vectors);
+        fixture.failCloud = true;
+
+        assertThatThrownBy(() -> builds.build("owner", documentId))
+                .isInstanceOf(KnowledgeBuildException.class).extracting("stage").isEqualTo(KnowledgeBuildStage.PARSE);
+        var failed = revisions.findByDocumentId(documentId).getLast();
+        assertThat(failed.revisionStatus()).isEqualTo(RevisionStatus.FAILED);
+        assertThat(failed.failureMessage()).isEqualTo("源文件解析失败");
+        assertThat(chunks.findByRevisionId(failed.id())).isEmpty();
+        assertThat(documents.findById(documentId).activeRevisionId()).isEqualTo(first.revisionId());
+        assertThat(documents.findById(documentId).indexStatus()).isEqualTo(DocumentIndexStatus.INDEXED);
+        assertThat(revisions.findById(first.revisionId()).revisionStatus()).isEqualTo(RevisionStatus.READY);
+        assertThat(chunks.findByRevisionId(first.revisionId())).isEqualTo(oldChunks);
+        assertThat(fixture.vectors).isEqualTo(oldVectors);
+    }
+
+    /**
      * 验证损坏的 DOCX 首次构建在 PARSE 阶段失败，版本标记 FAILED，不产生任何数据库片段与向量，源文件流被正常释放。
      */
     @Test
@@ -182,6 +214,12 @@ class KnowledgeChunkingBuildIntegrationTest {
         buildBinaryFormat("fixture.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", docxBytes());
     }
 
+    /** 验证本地 PDFBox 校验与云端解析替身结合真实切分器，在两种模式下完成 H2 版本发布。 */
+    @Test
+    void buildsPdfThroughRealChunkersAndH2PublicationWithCloudStub() throws Exception {
+        buildBinaryFormat("fixture.pdf", "application/pdf", pdfBytes());
+    }
+
     /** 逐一验证二进制文档的切分模式、发布状态、来源信息与仅检索块写向量的约束。 */
     private void buildBinaryFormat(String name, String mime, byte[] bytes) throws Exception {
         for (ChunkingMode mode : ChunkingMode.values()) {
@@ -205,8 +243,14 @@ class KnowledgeChunkingBuildIntegrationTest {
             assertThat(saved.stream().filter(c -> c.chunkRole() == ChunkRole.RETRIEVAL).count())
                     .isEqualTo(result.retrievalChunkCount());
             assertThat(saved).allSatisfy(chunk -> {
-                assertThat(chunk.pageStart()).isNull();
-                assertThat(chunk.headingPath()).isNotEmpty();
+                if (name.endsWith(".pdf")) {
+                    assertThat(chunk.pageStart()).isEqualTo(1);
+                    assertThat(chunk.pageEnd()).isEqualTo(1);
+                    assertThat(chunk.headingPath()).isNull();
+                } else {
+                    assertThat(chunk.pageStart()).isNull();
+                    assertThat(chunk.headingPath()).isNotEmpty();
+                }
                 if (chunk.parentChunkId() != null) {
                     assertThat(chunks.findById(chunk.parentChunkId()).chunkRole()).isEqualTo(ChunkRole.CONTEXT);
                 }
@@ -228,6 +272,15 @@ class KnowledgeChunkingBuildIntegrationTest {
         }
     }
 
+    /** 在内存中生成单页合法 PDF 容器，正文与版面由无网络云端替身提供。 */
+    private static byte[] pdfBytes() throws Exception {
+        try (var document = new PDDocument(); var output = new ByteArrayOutputStream()) {
+            document.addPage(new PDPage());
+            document.save(output);
+            return output.toByteArray();
+        }
+    }
+
     @TestConfiguration(proxyBeanMethods = false)
     static class Configuration {
         @Bean Fixture chunkingFixture() { return new Fixture(); }
@@ -245,8 +298,9 @@ class KnowledgeChunkingBuildIntegrationTest {
         }
         private static KnowledgeIndexBuildService build(Fixture fixture, KnowledgeDocumentRepository documents,
                 KnowledgeChunkService chunks, KnowledgeBuildLifecycleService lifecycle, int maxChunks) {
+            var pdfParser = new AlibabaPdfKnowledgeDocumentParser(1_000_000, fixture.docMind);
             var router = new KnowledgeProcessingRouter(List.of(new TextKnowledgeDocumentParser(1_000_000),
-                    new MarkdownKnowledgeDocumentParser(1_000_000), new DocxKnowledgeDocumentParser(1_000_000)),
+                    new MarkdownKnowledgeDocumentParser(1_000_000), new DocxKnowledgeDocumentParser(1_000_000), pdfParser),
                     List.of(new TokenBudgetKnowledgeChunker(ChunkingMode.FLAT),
                     new TokenBudgetKnowledgeChunker(ChunkingMode.PARENT_CHILD)));
             return new KnowledgeIndexBuildService(fixture.files, documents, router, new KnowledgeSourceReader(1_000_000),
@@ -259,11 +313,21 @@ class KnowledgeChunkingBuildIntegrationTest {
         final FileContentService files = mock(FileContentService.class);
         final List<KnowledgeVectorEntry> vectors = new ArrayList<>();
         final List<Integer> batchSizes = new ArrayList<>();
+        boolean failCloud;
+        final DocMindPdfParser docMind = pdfBytes -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            if (failCloud) throw new IllegalStateException("DocMind 文档解析失败");
+            return new Result(List.of(
+                    new Layout("扫描页标题", null, null, "title", "doc_title", 0, 0, 0),
+                    new Layout("阿里云替身返回的扫描 PDF 正文。".repeat(25), null, null, "text", "para", 0, 0, 1)),
+                    java.util.Set.of(0));
+        };
         String name, text, hash, mime = "text/plain";
         byte[] bytes;
         boolean closed;
         void configure(String name, String text) throws Exception {
             reset(files); vectors.clear(); batchSizes.clear(); closed = false;
+            failCloud = false;
             this.name = name; this.text = text; this.mime = "text/plain"; bytes = text.getBytes(StandardCharsets.UTF_8);
             hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
             when(files.requireOwnedProcessable("owner", "file")).thenReturn(new ProcessableFileAsset(name, "text/plain"));
@@ -275,6 +339,7 @@ class KnowledgeChunkingBuildIntegrationTest {
         /** 提供二进制源文件元数据、SHA-256 与可观测关闭状态的流，供构建入口真实读源。 */
         void configureBytes(String name, byte[] bytes, String mime) throws Exception {
             reset(files); vectors.clear(); batchSizes.clear(); closed = false;
+            failCloud = false;
             this.name = name; this.mime = mime; this.bytes = bytes; this.text = "";
             hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
             when(files.requireOwnedProcessable("owner", "file")).thenReturn(new ProcessableFileAsset(name, mime));

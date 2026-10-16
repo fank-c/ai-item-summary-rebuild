@@ -60,6 +60,15 @@ app:
       keep-separator: ${RAG_KEEP_SEPARATOR:true}
       punctuation-marks: "${RAG_PUNCTUATION_MARKS:.?!;。？！；\n}"
       max-source-size: ${APP_FILE_MAX_SIZE:20MB}
+      docmind:
+        enabled: ${APP_KNOWLEDGE_DOCMIND_ENABLED:false}
+        access-key-id: ${ALIYUN_DOCMIND_ACCESS_KEY_ID:}
+        access-key-secret: ${ALIYUN_DOCMIND_ACCESS_KEY_SECRET:}
+        endpoint: ${ALIYUN_DOCMIND_ENDPOINT:docmind-api.cn-hangzhou.aliyuncs.com}
+        vlm-enhancement: ${ALIYUN_DOCMIND_VLM_ENHANCEMENT:true}
+        formula-enhancement: ${ALIYUN_DOCMIND_FORMULA_ENHANCEMENT:false}
+        wait-timeout: ${ALIYUN_DOCMIND_WAIT_TIMEOUT:600s}
+        poll-interval: ${ALIYUN_DOCMIND_POLL_INTERVAL:2s}
   auth:
     mock:
       enabled: ${APP_AUTH_MOCK_ENABLED:true}
