@@ -31,6 +31,8 @@ import org.apache.poi.xwpf.usermodel.XWPFTable;
 import org.apache.poi.xwpf.usermodel.XWPFTableCell;
 import org.apache.poi.xwpf.usermodel.XWPFTableRow;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTDecimalNumber;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTP;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPPr;
@@ -47,7 +49,8 @@ import org.openxmlformats.schemas.wordprocessingml.x2006.main.STStyleType;
  *   <li>前置安全预检（Preflight）：ZIP 格式损坏、ZipSlip 路径穿越、条目数量/大小超限、ZIP 压缩炸弹（压缩比超 100:1）、XML DTD/XXE 注入拦截、XML 嵌套深度超限（>128）；</li>
  *   <li>正文提取与排版顺序：顶层段落与表格交错阅读顺序保留、段落 Run 文本合并、换行规整（CRLF -> LF）、空单元格与多段落表格支持；</li>
  *   <li>标题大纲解析优先级：段落内联 outline 0..8 -> 1..9 映射、outline=9 显式正文阻断回退、样式表 basedOn 继承链回溯、中英文标题别名匹配、循环继承与样式深度（>32）拦截；</li>
- *   <li>不支持排版防御：数学公式（oMath）、文本框、图片（drawing/pict）、嵌套表格、不支持的正文容器（altChunk/sdt）严格拦截；</li>
+ *   <li>图片兼容：跳过内嵌、浮动和旧式图片，保留同 Run、相邻段落与表格的文字；纯图片文档仍因缺少文字失败；</li>
+ *   <li>不支持排版防御：数学公式（oMath）、文本框、嵌入对象、嵌套表格、不支持的正文容器（altChunk/sdt）严格拦截；</li>
  *   <li>位置与偏移：多块段落逻辑全文拼接后的 UTF-16 偏移半开区间 {@code [start_offset, end_offset)} 计算。</li>
  * </ul>
  */
@@ -922,38 +925,169 @@ class DocxKnowledgeDocumentParserTest {
                 .withMessage("不支持文本框");
     }
 
+    /** 图片与文字可位于同一个 Run，跳过图片时不能丢掉该 Run 的正文。 */
     @Test
-    void rejectsEmbeddedPictures() {
+    void skipsEmbeddedPicturesAndPreservesTextInTheSameRun() {
+        PreparedSource source = DocxTestSamples.poiDocx(doc -> {
+            var heading = doc.createParagraph();
+            heading.setStyle("Heading 1");
+            heading.createRun().setText("操作说明");
+            var run = doc.createParagraph().createRun();
+            run.setText("图片前的正文。");
+            DocxTestSamples.addPicture(run);
+            run.setText("图片后的正文。");
+            doc.createParagraph().createRun().setText("后续步骤。");
+        });
+
+        ParsedDocument parsed = parser.parse(source);
+        assertThat(parsed.blocks()).extracting(ContentBlock::text).containsExactly(
+                "操作说明", "图片前的正文。图片后的正文。", "后续步骤。");
+        assertThat(parsed.blocks()).allSatisfy(block ->
+                assertThat(block.headingPath()).containsExactly(new Heading(1, "操作说明")));
+        assertLogicalOffsets(parsed);
+    }
+
+    /** 独占段落的图片不生成文字块，表格中的纯图片单元格保留为空列。 */
+    @Test
+    void skipsImageOnlyParagraphsAndPreservesTableTextAndEmptyCells() {
+        PreparedSource source = DocxTestSamples.poiDocx(doc -> {
+            doc.createParagraph().createRun().setText("表格前。");
+            DocxTestSamples.addPicture(doc.createParagraph().createRun());
+            var table = doc.createTable(1, 2);
+            DocxTestSamples.addPicture(table.getRow(0).getCell(0).getParagraphs().getFirst().createRun());
+            var run = table.getRow(0).getCell(1).getParagraphs().getFirst().createRun();
+            run.setText("单元格前");
+            DocxTestSamples.addPicture(run);
+            run.setText("单元格后");
+            doc.createParagraph().createRun().setText("表格后。");
+        });
+
+        ParsedDocument parsed = parser.parse(source);
+        assertThat(parsed.blocks()).extracting(ContentBlock::type).containsExactly(
+                ContentBlockType.TEXT, ContentBlockType.TABLE, ContentBlockType.TEXT);
+        assertThat(parsed.blocks()).extracting(ContentBlock::text).containsExactly(
+                "表格前。", "\t单元格前单元格后", "表格后。");
+        assertLogicalOffsets(parsed);
+    }
+
+    /** 浮动图使用 anchor 容器，仍只提取正文而不生成图片描述。 */
+    @Test
+    void skipsFloatingPicturesAndTheirAlternativeDescriptions() {
+        PreparedSource source = DocxTestSamples.poiDocx(doc -> {
+            var run = doc.createParagraph().createRun();
+            run.setText("浮动图前。");
+            DocxTestSamples.addPicture(run);
+            var drawing = run.getCTR().getDrawingArray(0);
+            var inline = drawing.getInlineArray(0);
+            inline.getDocPr().setDescr("图片替代说明不属于正文");
+            drawing.addNewAnchor().set(inline);
+            drawing.removeInline(0);
+            run.setText("浮动图后。");
+        });
+
+        ParsedDocument parsed = parser.parse(source);
+        assertThat(parsed.blocks()).extracting(ContentBlock::text).containsExactly("浮动图前。浮动图后。");
+        assertLogicalOffsets(parsed);
+    }
+
+    @Test
+    void rejectsImageOnlyDocumentsBecauseNoTextCanBeExtracted() {
+        PreparedSource source = DocxTestSamples.poiDocx(doc ->
+                DocxTestSamples.addPicture(doc.createParagraph().createRun()));
+
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> parser.parse(source))
+                .withMessage("文档没有可解析的有效内容");
+    }
+
+    /** 兼容旧式 VML 和链接图片，只读取同 Run 文字，不读取图片关系指向的资源。 */
+    @Test
+    void skipsLegacyAndLinkedPictures() {
         String docXml = """
-                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
                 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-                            xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"
+                            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+                            xmlns:v="urn:schemas-microsoft-com:vml"
                             xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
                             xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
                   <w:body>
-                    <w:p>
-                      <w:r>
-                        <w:drawing>
-                          <wp:inline>
-                            <a:graphic>
-                              <a:graphicData>
-                                <pic:pic>
-                                  <pic:blipFill><a:blip/></pic:blipFill>
-                                </pic:pic>
-                              </a:graphicData>
-                            </a:graphic>
-                          </wp:inline>
-                        </w:drawing>
-                      </w:r>
-                    </w:p>
+                    <w:p><w:r><w:t>旧式图前。</w:t>
+                      <w:pict><v:shape><v:imagedata r:id="rIdImage"/></v:shape></w:pict>
+                      <w:t>旧式图后。</w:t></w:r></w:p>
+                    <w:p><w:r><w:t>链接图前。</w:t>
+                      <w:drawing><wp:inline><a:graphic><a:graphicData>
+                        <a:blip r:link="rIdImage"/>
+                      </a:graphicData></a:graphic></wp:inline></w:drawing>
+                      <w:t>链接图后。</w:t></w:r></w:p>
                   </w:body>
                 </w:document>
                 """;
+        String relationships = """
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rIdImage" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+                                Target="file:///nonexistent-docx-test-image.png" TargetMode="External"/>
+                </Relationships>
+                """;
+        PreparedSource source = DocxTestSamples.customZipDocx(Map.of(
+                "word/document.xml", docXml.getBytes(StandardCharsets.UTF_8),
+                "word/_rels/document.xml.rels", relationships.getBytes(StandardCharsets.UTF_8)));
 
-        PreparedSource source = DocxTestSamples.documentXmlDocx(docXml, null);
+        ParsedDocument parsed = parser.parse(source);
+        assertThat(parsed.blocks()).extracting(ContentBlock::text).containsExactly(
+                "旧式图前。旧式图后。", "链接图前。链接图后。");
+        assertLogicalOffsets(parsed);
+    }
+
+    /** 放行普通图片不等于支持嵌入对象，例如 OLE 附件和控件仍应明确拒绝。 */
+    @ParameterizedTest
+    @ValueSource(strings = {"<w:object/>", "<o:OLEObject/>", "<w:control/>"})
+    void stillRejectsEmbeddedObjects(String objectXml) {
+        String docXml = """
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                            xmlns:o="urn:schemas-microsoft-com:office:office">
+                  <w:body><w:p><w:r><w:t>正文</w:t>%s</w:r></w:p></w:body>
+                </w:document>
+                """.formatted(objectXml);
+
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> parser.parse(DocxTestSamples.documentXmlDocx(docXml, null)))
+                .withMessage("不支持嵌入对象");
+    }
+
+    /** 跳过图片不能顺带丢弃 DrawingML 或 VML 中的文本框内容。 */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "<w:drawing><a:txBody><a:p><a:r><a:t>形状文字</a:t></a:r></a:p></a:txBody></w:drawing>",
+            "<w:pict><v:shape><v:textbox><w:txbxContent><w:p><w:r><w:t>文本框</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict>"
+    })
+    void stillRejectsTextBoxesInsideDrawingsAndLegacyPictures(String drawingXml) {
+        String docXml = """
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                            xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+                            xmlns:v="urn:schemas-microsoft-com:vml">
+                  <w:body><w:p><w:r><w:t>普通正文</w:t>%s</w:r></w:p></w:body>
+                </w:document>
+                """.formatted(drawingXml);
+
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> parser.parse(DocxTestSamples.documentXmlDocx(docXml, null)))
+                .withMessage("不支持文本框");
+    }
+
+    /** 图片不参与文字提取，但其压缩数据不能绕过 ZIP 资源预算。 */
+    @Test
+    void imageMediaEntriesStillRespectCompressionRatioBudget() {
+        String docXml = """
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body><w:p><w:r><w:t>有效正文</w:t></w:r></w:p></w:body>
+                </w:document>
+                """;
+        PreparedSource source = DocxTestSamples.customZipDocx(Map.of(
+                "word/document.xml", docXml.getBytes(StandardCharsets.UTF_8),
+                "word/media/image1.png", new byte[1024 * 1024 + 1]));
+
         assertThatIllegalArgumentException()
                 .isThrownBy(() -> parser.parse(source))
-                .withMessage("不支持图片");
+                .withMessage("DOCX 压缩比异常");
     }
 
     @Test

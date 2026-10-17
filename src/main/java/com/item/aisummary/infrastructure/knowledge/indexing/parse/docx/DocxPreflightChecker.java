@@ -22,7 +22,7 @@ import javax.xml.stream.XMLStreamReader;
  *   <li>验证必需组成部分（[Content_Types].xml 与 word/document.xml），校验 ZipSlip 与重复条目。</li>
  *   <li>限制 ZIP 条目总数、单条目展开大小、全部展开总大小与压缩解压比率。</li>
  *   <li>对所有 .xml 与 .rels 条目使用 StAX 强制禁用 DTD 与外部实体解析，并拒绝 DTD 事件。</li>
- *   <li>在 StAX 遍历中校验 XML 嵌套深度、总字符预算、正文顶层容器、段落不支持元素及嵌套表格。</li>
+ *   <li>在 StAX 遍历中校验 XML 嵌套深度、总字符预算、正文顶层容器、段落不支持元素及嵌套表格；普通图片允许由正文解析器跳过，媒体条目仍计入 ZIP 预算。</li>
  * </ul>
  */
 final class DocxPreflightChecker {
@@ -216,11 +216,13 @@ final class DocxPreflightChecker {
                             if ("oMath".equals(local) || "oMathPara".equals(local)) {
                                 throw new IllegalArgumentException("不支持数学公式");
                             }
-                            if ("txbxContent".equals(local) || "textbox".equals(local) || "txbx".equals(local)) {
+                            if ("txbxContent".equals(local) || "textbox".equals(local)
+                                    || "txbx".equals(local) || "txBody".equals(local)) {
                                 throw new IllegalArgumentException("不支持文本框");
                             }
-                            if ("pic".equals(local) || "blip".equals(local) || "imagedata".equals(local)) {
-                                throw new IllegalArgumentException("不支持图片");
+                            // 普通图片仅跳过，不因配图拒绝整篇正文；OLE 等嵌入对象仍不在支持范围内。
+                            if ("object".equals(local) || "OLEObject".equals(local) || "control".equals(local)) {
+                                throw new IllegalArgumentException("不支持嵌入对象");
                             }
 
                             if (structureCount > MAX_BLOCKS) {

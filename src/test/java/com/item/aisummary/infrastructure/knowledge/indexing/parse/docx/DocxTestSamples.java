@@ -3,15 +3,18 @@ package com.item.aisummary.infrastructure.knowledge.indexing.parse.docx;
 import com.item.aisummary.application.knowledge.indexing.source.FileFormat;
 import com.item.aisummary.application.knowledge.indexing.source.PreparedSource;
 import com.item.aisummary.infrastructure.knowledge.indexing.parse.support.ParserTestSources;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xwpf.usermodel.XWPFRun;
 
 /**
  * DOCX 解析器单元测试辅助数据生成器。
@@ -23,7 +26,20 @@ import org.apache.poi.xwpf.usermodel.XWPFDocument;
  * </ul>
  */
 final class DocxTestSamples {
+    /** 本地生成图片条目所用的 1×1 PNG，不含外部地址或业务数据。 */
+    private static final byte[] PNG_BYTES = Base64.getDecoder().decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=");
+
     private DocxTestSamples() {}
+
+    /** 为指定 Run 插入真实内嵌 PNG，使测试同时覆盖媒体条目与正文关系引用。 */
+    static void addPicture(XWPFRun run) {
+        try (var image = new ByteArrayInputStream(PNG_BYTES)) {
+            run.addPicture(image, XWPFDocument.PICTURE_TYPE_PNG, "fixture.png", 9525, 9525);
+        } catch (Exception e) {
+            throw new IllegalStateException("DOCX 图片样本构建失败", e);
+        }
+    }
 
     /**
      * 基于真实 POI API 构造受控 DOCX 测试源。

@@ -30,7 +30,8 @@ import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR;
  * <ul>
  *   <li>仅支持 DOCX 格式，要求输入非空且在大小预算范围内。</li>
  *   <li>正文仅支持顶层段落（paragraph）与表格（table），保持原有交错阅读顺序；其他正文内容容器（如 SDT、altChunk）明确拒绝。</li>
- *   <li>不支持的内容明确拒绝：数学公式、文本框、嵌入图片与嵌套表格均予拦截；外部超链接仅提取展示文本，不访问网络；正文外页眉页脚不提取。</li>
+ *   <li>普通图片跳过，保留同段及单元格文字，不做 OCR、不生成图片描述或占位文本；纯图片文档因没有有效文字而失败。</li>
+ *   <li>数学公式、文本框、嵌入对象与嵌套表格仍明确拒绝；外部超链接仅提取展示文本，不访问网络；正文外页眉页脚不提取。</li>
  *   <li>标题层级由 {@link DocxHeadingResolver} 严格判定；基于逻辑全文拼接精确计算内容块 UTF-16 偏移半开区间。</li>
  *   <li>在 POI 实例化前由 {@link DocxPreflightChecker} 执行 ZIP 预算与 StAX 结构安全预检；对外异常统一固定脱敏，不泄漏原始异常或文档细节。</li>
  * </ul>
@@ -222,29 +223,21 @@ public final class DocxKnowledgeDocumentParser implements KnowledgeDocumentParse
     }
 
     /**
-     * 校验段落中是否包含不支持的高级排版元素（数学公式、文本框、图片）。
+     * 校验不支持的数学公式和嵌入对象；普通图片允许跳过，文本框由 XML 前置预检拒绝。
      *
      * @param paragraph POI XWPFParagraph 段落对象
-     * @throws IllegalArgumentException 当段落包含公式或图片时抛出
+     * @throws IllegalArgumentException 当段落包含公式或嵌入对象时抛出
      */
     static void validateParagraph(XWPFParagraph paragraph) {
         var ctp = paragraph.getCTP();
-        if (ctp != null) {
-            if (ctp.sizeOfOMathArray() > 0 || ctp.sizeOfOMathParaArray() > 0) {
-                throw new IllegalArgumentException("不支持数学公式");
-            }
-            // Preflight rejects actual textbox elements; serialized XML text also contains ordinary user text.
+        if (ctp != null && (ctp.sizeOfOMathArray() > 0 || ctp.sizeOfOMathParaArray() > 0)) {
+            throw new IllegalArgumentException("不支持数学公式");
         }
         for (IRunElement runElement : paragraph.getIRuns()) {
             if (runElement instanceof XWPFRun run) {
-                if (!run.getEmbeddedPictures().isEmpty()) {
-                    throw new IllegalArgumentException("不支持图片");
-                }
                 CTR ctr = run.getCTR();
-                if (ctr != null) {
-                    if (ctr.sizeOfDrawingArray() > 0 || ctr.sizeOfPictArray() > 0 || ctr.sizeOfObjectArray() > 0) {
-                        throw new IllegalArgumentException("不支持图片");
-                    }
+                if (ctr != null && ctr.sizeOfObjectArray() > 0) {
+                    throw new IllegalArgumentException("不支持嵌入对象");
                 }
             }
         }
@@ -253,7 +246,8 @@ public final class DocxKnowledgeDocumentParser implements KnowledgeDocumentParse
     /**
      * 合并段落中的全部 Run 提取纯文本正文。
      *
-     * <p>过滤修订删除内容（delText），递归提取行内 SDT 文本，并将 Windows/Mac 换行统统规范化为 LF（\n）。
+     * <p>过滤修订删除内容（delText），提取行内 SDT 文本，并将 Windows/Mac 换行统统规范化为 LF（\n）。
+     * 普通图片由 Run 文本提取自然跳过，但同一 Run 的普通文字仍保留；不使用包含图片说明的 Run.toString()。
      *
      * @param paragraph 段落对象
      * @return 规整后的段落文本

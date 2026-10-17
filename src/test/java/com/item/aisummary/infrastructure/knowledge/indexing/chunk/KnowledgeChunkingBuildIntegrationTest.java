@@ -208,7 +208,7 @@ class KnowledgeChunkingBuildIntegrationTest {
         jdbc.update("DELETE FROM file_asset");
     }
 
-    /** 验证本地 DOCX 解析结合真实切分器与 H2，在两种切分模式下完成片段保存和版本发布。 */
+    /** 验证带普通图片的 DOCX 跳过图片后，在两种切分模式下完成真实切分、H2 片段保存和版本发布。 */
     @Test
     void buildsDocxThroughRealChunkersAndH2Publication() throws Exception {
         buildBinaryFormat("fixture.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", docxBytes());
@@ -260,12 +260,18 @@ class KnowledgeChunkingBuildIntegrationTest {
         }
     }
 
-    /** 在内存中生成含一级标题与长正文的 DOCX，确保父子模式能产生上下文块。 */
+    /** 在内存中生成一级标题、真实内嵌 PNG 与长正文，覆盖配图兼容且确保父子模式能产生上下文块。 */
     private static byte[] docxBytes() throws Exception {
         try (var document = new XWPFDocument(); var output = new ByteArrayOutputStream()) {
             var heading = document.createParagraph();
             heading.setStyle("Heading 1");
             heading.createRun().setText("操作手册");
+            byte[] png = java.util.Base64.getDecoder().decode(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=");
+            try (var image = new ByteArrayInputStream(png)) {
+                document.createParagraph().createRun().addPicture(
+                        image, XWPFDocument.PICTURE_TYPE_PNG, "fixture.png", 9525, 9525);
+            }
             document.createParagraph().createRun().setText("先准备设备，再按步骤完成检查。".repeat(20));
             document.write(output);
             return output.toByteArray();
