@@ -67,16 +67,18 @@ RAG 构建默认关闭，基础元数据与健康接口不需要模型或向量�
 - `APP_KNOWLEDGE_RAG_ENABLED=true` 时自动装配本地生产解析策略：纯文本（TXT）、Markdown 和 Office Word（DOCX，基于 Apache POI 5.4.1）。解析过程均为本地纯 Java 处理，无外部网络/模型调用，构造参数复用 `maxSourceSize`（绑定 `APP_FILE_MAX_SIZE`）。
 - 仅当 `APP_KNOWLEDGE_RAG_ENABLED=true` 且 `APP_KNOWLEDGE_DOCMIND_ENABLED=true` 时，装配基于阿里云文档智能的 PDF 云端解析策略 Bean（`AlibabaPdfKnowledgeDocumentParser` / `DocMindPdfParserClient`）。未显式启用时不会上传任何文件至云端；启用后上传 PDF 进行云端解析会消耗服务额度并可能产生费用，且启动时必须配置 AccessKey ID 与 Secret。
 
-变量通过主配置映射到 Spring AI 2.0.1 的 Embedding 与 Qdrant 属性。
+变量通过主配置映射到 Spring AI 2.0.1 的 Embedding 与 Qdrant 属性。硅基流动可按 OpenAI 兼容接口使用 `OPENAI_EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1`、`OPENAI_EMBEDDING_MODEL=BAAI/bge-m3`，并填写 `OPENAI_EMBEDDING_API_KEY`。该模型输出 1024 维，保持 `OPENAI_EMBEDDING_DIMENSIONS` 为空；Qdrant 集合也必须为 1024 维。聊天仍可保持关闭。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `APP_KNOWLEDGE_RAG_ENABLED` | `false` | 是否装配内部构建服务；关闭时该服务 Bean 不存在 |
 | `SPRING_AI_MODEL_EMBEDDING` | `none` | 启用时为 `openai` |
 | `SPRING_AI_VECTORSTORE_TYPE` | `none` | 启用时为 `qdrant`；关闭防止默认创建向量后端 |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容聊天服务的公共 base URL |
 | `OPENAI_EMBEDDING_API_KEY` | 空 | Embedding 专用凭据，未提供有效值时模型可沿用公共 `OPENAI_API_KEY` |
-| `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding 模型，独立于聊天模型 |
-| `OPENAI_EMBEDDING_DIMENSIONS` | 空 | 可选正整数，空时使用模型默认值，集合维度必须匹配 |
+| `OPENAI_EMBEDDING_BASE_URL` | 空 | Embedding 专用 base URL；未设置时沿用 `OPENAI_BASE_URL` |
+| `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding 模型，独立于聊天模型；SiliconFlow 示例为 `BAAI/bge-m3` |
+| `OPENAI_EMBEDDING_DIMENSIONS` | 空 | 可选正整数，空时由模型推断，结果必须与集合维度匹配。SiliconFlow `BAAI/bge-m3` 输出 1024 维且不支持此请求参数，应保持为空 |
 | `QDRANT_HOST` | `localhost` | Qdrant 主机，按实际服务覆盖 |
 | `QDRANT_PORT` | `6334` | gRPC 端口 |
 | `QDRANT_USE_TLS` | `false` | 使用 TLS，托管服务通常需启用 |
