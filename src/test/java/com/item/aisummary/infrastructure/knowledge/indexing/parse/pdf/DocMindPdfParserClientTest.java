@@ -8,6 +8,10 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import com.aliyun.tea.TeaException;
 import com.aliyun.docmind_api20220711.Client;
 import com.aliyun.docmind_api20220711.models.GetDocParserResultRequest;
 import com.aliyun.docmind_api20220711.models.GetDocParserResultResponse;
@@ -27,8 +31,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.IntStream;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 /**
  * 阿里云文档智能（DocMind）客户端适配器单元测试。
@@ -43,13 +49,23 @@ import org.junit.jupiter.api.Test;
  * </ul>
  */
 class DocMindPdfParserClientTest {
+    /** 捕获本类日志，断言失败步骤可定位且不输出 SDK 的任意消息或 Throwable。 */
+    private final ListAppender<ILoggingEvent> logs = new ListAppender<>();
+    private final Logger logger = (Logger) LoggerFactory.getLogger(DocMindPdfParserClient.class);
     private final Client sdk = mock(Client.class);
     private final AtomicLong nanos = new AtomicLong();
     private final DocMindProperties properties = new DocMindProperties(true, "fixture-id", "fixture-secret",
             "docmind-api.cn-hangzhou.aliyuncs.com", true, false, Duration.ofSeconds(10), Duration.ofSeconds(1));
     private final DocMindPdfParserClient parser = new DocMindPdfParserClient(sdk, properties, nanos::get, nanos::addAndGet);
 
+    @AfterEach void detachLogs() {
+        logger.detachAppender(logs);
+        logs.stop();
+    }
+
     @BeforeEach void submitAndSucceed() throws Exception {
+        logs.start();
+        logger.addAppender(logs);
         when(sdk.submitDocParserJobAdvance(any(), any())).thenReturn(new SubmitDocParserJobResponse()
                 .setStatusCode(200).setBody(new SubmitDocParserJobResponseBody().setCode("200")
                         .setData(new SubmitDocParserJobResponseBodyData().setId("fixture-task"))));
@@ -147,16 +163,39 @@ class DocMindPdfParserClientTest {
     }
 
     @Test void sdkFailuresDiscardSensitiveMessagesAndCauses() throws Exception {
-        when(sdk.submitDocParserJobAdvance(any(), any())).thenThrow(new IllegalStateException("secret signed-url body"));
+        var failure = new TeaException(Map.of("code", "AccessDenied",
+                "message", "private-secret https://private.invalid?signature=fixture",
+                "data", Map.of("statusCode", 403, "RequestId", "fixture-request", "body", "private-body")));
+        when(sdk.submitDocParserJobAdvance(any(), any())).thenThrow(failure);
         assertThatThrownBy(() -> parser.parse(new byte[]{1})).hasMessage("DocMind 文档提交失败").hasNoCause();
+        assertThat(logs.list).extracting(ILoggingEvent::getFormattedMessage)
+                .anySatisfy(message -> assertThat(message).contains("providerCode=AccessDenied", "providerRequestId=fixture-request"))
+                .anySatisfy(message -> assertThat(message).contains("stage=SUBMIT", "inputBytes=1"))
+                .allSatisfy(message -> assertThat(message).doesNotContain("private-secret", "private.invalid", "private-body"));
+        assertThat(logs.list).allSatisfy(event -> assertThat(event.getThrowableProxy()).isNull());
     }
 
     @Test void businessErrorInHttp200DoesNotProceed() throws Exception {
         var error = status("success", List.of(0));
-        error.getBody().setCode("QuotaExceeded").setMessage("private provider message");
+        error.getBody().setCode("QuotaExceeded").setMessage("private provider message").setRequestId("quota-request");
         when(sdk.queryDocParserStatusWithOptions(any(), any())).thenReturn(error);
         assertThatThrownBy(() -> parser.parse(new byte[]{1})).hasMessage("DocMind 响应状态无效").hasNoCause();
         verify(sdk, never()).getDocParserResultWithOptions(any(), any());
+        assertThat(logs.list).extracting(ILoggingEvent::getFormattedMessage)
+                .anySatisfy(message -> assertThat(message).contains("httpStatus=200", "providerCode=QuotaExceeded", "quota-request"))
+                .allSatisfy(message -> assertThat(message).doesNotContain("private provider message"));
+    }
+
+    @Test void logsSecondPageCursorWhenLayoutMappingFails() throws Exception {
+        when(sdk.getDocParserResultWithOptions(any(), any())).thenReturn(
+                result(IntStream.range(0, 100).mapToObj(DocMindPdfParserClientTest::layout).toList()),
+                result(List.of(Map.of("pageNum", 0.5, "text", "private-page-text"))));
+
+        assertThatThrownBy(() -> parser.parse(new byte[]{1})).hasMessage("DocMind 整数字段无效");
+        assertThat(logs.list).extracting(ILoggingEvent::getFormattedMessage)
+                .anySatisfy(message -> assertThat(message).contains("taskId=fixture-task", "layoutOffset=100", "accumulatedLayouts=100"))
+                .anySatisfy(message -> assertThat(message).contains("stage=FETCH"))
+                .allSatisfy(message -> assertThat(message).doesNotContain("private-page-text"));
     }
 
     @Test void duplicatePageIdsAndMalformedLayoutFieldsFailClosed() throws Exception {

@@ -18,6 +18,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.function.LongSupplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 阿里云文档智能（Document Mind）PDF 云端解析客户端适配器。
@@ -38,6 +40,8 @@ import java.util.function.LongSupplier;
  * </ul>
  */
 public final class DocMindPdfParserClient implements DocMindPdfParser {
+    private static final Logger log = LoggerFactory.getLogger(DocMindPdfParserClient.class);
+
     /** 每次向 DocMind 拉取版面结果的单页步长大小。 */
     static final int LAYOUT_PAGE_SIZE = 100;
     /** DocMind 允许提取的最大版面数量防御上限。 */
@@ -89,6 +93,8 @@ public final class DocMindPdfParserClient implements DocMindPdfParser {
                     .setReadTimeout((int) MAX_READ_TIMEOUT_MILLIS)
                     .setEnableUsageDataCollection(false));
         } catch (Exception exception) {
+            log.warn("DocMind 客户端初始化失败: exceptionType={}, failureLocation={}",
+                    PdfParserDiagnostics.exceptionType(exception), PdfParserDiagnostics.failureLocation(exception));
             throw failure("DocMind 客户端初始化失败");
         }
     }
@@ -117,16 +123,29 @@ public final class DocMindPdfParserClient implements DocMindPdfParser {
         // 以纳秒为单位计算绝对截止时间（deadline），贯穿后续所有提交、轮询休眠与分页拉取调用
         long deadline = nanoTime.getAsLong() + properties.waitTimeout().toNanos();
 
-        // 阶段 1：提交解析作业
-        String taskId = submitJob(pdfBytes, deadline);
+        String stage = "SUBMIT";
+        String taskId = null;
+        try {
+            // 阶段 1：提交解析作业
+            taskId = submitJob(pdfBytes, deadline);
 
-        // 阶段 2：轮询等待作业完成并提取已识别页码集合
-        Set<Integer> processedPages = waitForCompletion(taskId, deadline);
+            // 阶段 2：轮询等待作业完成并提取已识别页码集合
+            stage = "POLL";
+            Set<Integer> processedPages = waitForCompletion(taskId, deadline);
 
-        // 阶段 3：分页拉取全部版面数据并装配为 Result
-        List<Layout> layouts = fetchLayouts(taskId, deadline);
+            // 阶段 3：分页拉取全部版面数据并装配为 Result
+            stage = "FETCH";
+            List<Layout> layouts = fetchLayouts(taskId, deadline);
 
-        return new Result(layouts, processedPages);
+            return new Result(layouts, processedPages);
+        } catch (RuntimeException exception) {
+            // 不回显 SDK 或响应中的自由文本；仅保留本地固定原因以及经过字符和长度限制的任务标识。
+            log.warn("DocMind PDF 解析失败: stage={}, taskId={}, inputBytes={}, exceptionType={}, reason={}, failureLocation={}",
+                    stage, PdfParserDiagnostics.identifier(taskId), pdfBytes.length,
+                    PdfParserDiagnostics.exceptionType(exception), PdfParserDiagnostics.exceptionMessage(exception),
+                    PdfParserDiagnostics.failureLocation(exception));
+            throw exception;
+        }
     }
 
     /**
@@ -155,7 +174,7 @@ public final class DocMindPdfParserClient implements DocMindPdfParser {
             if (body == null) {
                 throw failure("DocMind 提交响应无效");
             }
-            requireResponse(response.getStatusCode(), body.getCode());
+            requireResponse(response.getStatusCode(), body.getCode(), body.getRequestId());
 
             String taskId = body.getData() == null ? null : body.getData().getId();
             if (taskId == null || taskId.isBlank()) {
@@ -209,16 +228,22 @@ public final class DocMindPdfParserClient implements DocMindPdfParser {
             if (data == null) {
                 throw failure("DocMind 状态响应无效");
             }
-            requireResponse(response.getStatusCode(), body.getCode());
+            requireResponse(response.getStatusCode(), body.getCode(), body.getRequestId());
 
             String status = data.getStatus();
             if ("success".equalsIgnoreCase(status)) {
                 return pageIds(data.getOutputFormatResult());
             }
             if ("fail".equalsIgnoreCase(status)) {
+                log.warn("DocMind 云端任务失败: taskId={}, providerRequestId={}, providerCode={}",
+                        PdfParserDiagnostics.identifier(taskId), PdfParserDiagnostics.identifier(body.getRequestId()),
+                        PdfParserDiagnostics.identifier(body.getCode()));
                 throw failure("DocMind 文档解析失败");
             }
             if (!"init".equalsIgnoreCase(status) && !"processing".equalsIgnoreCase(status)) {
+                log.warn("DocMind 返回未知任务状态: taskId={}, providerRequestId={}, taskStatus={}",
+                        PdfParserDiagnostics.identifier(taskId), PdfParserDiagnostics.identifier(body.getRequestId()),
+                        PdfParserDiagnostics.identifier(status));
                 throw failure("DocMind 返回未知任务状态");
             }
 
@@ -258,43 +283,52 @@ public final class DocMindPdfParserClient implements DocMindPdfParser {
         long totalResultChars = 0;
 
         while (true) {
+            int layoutOffset = layouts.size();
             var request = new GetDocParserResultRequest()
                     .setId(taskId)
-                    .setLayoutNum(layouts.size())
+                    .setLayoutNum(layoutOffset)
                     .setLayoutStepSize(LAYOUT_PAGE_SIZE);
 
-            var response = call(() -> client.getDocParserResultWithOptions(request, runtimeOptions(deadline)),
-                    deadline, "DocMind 结果获取失败");
+            try {
+                var response = call(() -> client.getDocParserResultWithOptions(request, runtimeOptions(deadline)),
+                        deadline, "DocMind 结果获取失败");
 
-            var body = response == null ? null : response.getBody();
-            var data = body == null ? null : body.getData();
-            if (data == null) {
-                throw failure("DocMind 结果响应无效");
-            }
-            requireResponse(response.getStatusCode(), body.getCode());
-
-            if (!(data.get("layouts") instanceof List<?> rawLayouts) || rawLayouts.size() > LAYOUT_PAGE_SIZE) {
-                throw failure("DocMind 版面结果无效");
-            }
-
-            // 预先校验版面总数防御上限
-            if (rawLayouts.size() > MAX_LAYOUTS - layouts.size()) {
-                throw failure("DocMind 版面数量超过解析限制");
-            }
-
-            for (Object raw : rawLayouts) {
-                Layout layout = parseLayout(raw);
-                long chars = calculateLayoutChars(layout);
-                totalResultChars += chars;
-                if (totalResultChars > MAX_RESULT_CHARS) {
-                    throw failure("DocMind 提取文本超过解析限制");
+                var body = response == null ? null : response.getBody();
+                var data = body == null ? null : body.getData();
+                if (data == null) {
+                    throw failure("DocMind 结果响应无效");
                 }
-                layouts.add(layout);
-            }
+                requireResponse(response.getStatusCode(), body.getCode(), body.getRequestId());
 
-            // 游标拉取结束判定：当本次返回条数不足单页步长时，说明云端已无后续数据
-            if (rawLayouts.size() < LAYOUT_PAGE_SIZE) {
-                break;
+                if (!(data.get("layouts") instanceof List<?> rawLayouts) || rawLayouts.size() > LAYOUT_PAGE_SIZE) {
+                    throw failure("DocMind 版面结果无效");
+                }
+
+                // 预先校验版面总数防御上限
+                if (rawLayouts.size() > MAX_LAYOUTS - layouts.size()) {
+                    throw failure("DocMind 版面数量超过解析限制");
+                }
+
+                for (Object raw : rawLayouts) {
+                    Layout layout = parseLayout(raw);
+                    long chars = calculateLayoutChars(layout);
+                    totalResultChars += chars;
+                    if (totalResultChars > MAX_RESULT_CHARS) {
+                        throw failure("DocMind 提取文本超过解析限制");
+                    }
+                    layouts.add(layout);
+                }
+
+                // 游标拉取结束判定：当本次返回条数不足单页步长时，说明云端已无后续数据
+                if (rawLayouts.size() < LAYOUT_PAGE_SIZE) {
+                    break;
+                }
+            } catch (RuntimeException exception) {
+                // 连同响应校验与版面转换一起记录游标；layoutOffset 是请求起点，不随本页已追加条目变化。
+                log.warn("DocMind 结果分页失败: taskId={}, layoutOffset={}, accumulatedLayouts={}, reason={}",
+                        PdfParserDiagnostics.identifier(taskId), layoutOffset, layouts.size(),
+                        PdfParserDiagnostics.exceptionMessage(exception));
+                throw exception;
             }
         }
 
@@ -392,7 +426,10 @@ public final class DocMindPdfParserClient implements DocMindPdfParser {
             Thread.currentThread().interrupt();
             throw failure("等待 DocMind 解析时被中断");
         } catch (Exception exception) {
-            // SDK 异常可能包含凭据、签名 URL 和完整的供应商响应体；必须丢弃 cause 防止日志或上层泄漏
+            // 不尝试用正则清洗任意 SDK 消息；只提取结构化错误字段，并保留异常类型和抛出位置。
+            log.warn("DocMind OpenAPI 调用失败: operation={}, exceptionType={}, failureLocation={}, sdkDetails={}",
+                    safeMessage, PdfParserDiagnostics.exceptionType(exception),
+                    PdfParserDiagnostics.failureLocation(exception), PdfParserDiagnostics.sdkDetails(exception));
             throw failure(safeMessage);
         }
         requireTime(deadline);
@@ -405,11 +442,10 @@ public final class DocMindPdfParserClient implements DocMindPdfParser {
      * <p>即使 HTTP 状态码为 200，若云端返回的业务状态码 code 不等于 "200"（例如 QuotaExceeded），
      * 也必须判定为失败并抛出脱敏异常。
      */
-    private static void requireResponse(Integer httpStatus, String code) {
-        if (httpStatus == null || httpStatus < 200 || httpStatus >= 300) {
-            throw failure("DocMind 响应状态无效");
-        }
-        if (code != null && !"200".equals(code)) {
+    private static void requireResponse(Integer httpStatus, String code, String requestId) {
+        if (httpStatus == null || httpStatus < 200 || httpStatus >= 300 || (code != null && !"200".equals(code))) {
+            log.warn("DocMind 响应状态无效: httpStatus={}, providerCode={}, providerRequestId={}",
+                    httpStatus, PdfParserDiagnostics.identifier(code), PdfParserDiagnostics.identifier(requestId));
             throw failure("DocMind 响应状态无效");
         }
     }
