@@ -17,6 +17,8 @@ import java.util.List;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 基于阿里云文档智能（Document Mind）与本地 Apache PDFBox 的 PDF 生产文档解析策略实现。
@@ -26,7 +28,7 @@ import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
  *   <li>本地 PDFBox 容器防御：PDFBox 仅用于内存流中检验 PDF 容器结构合法性、拦截损坏/加密文件，并限制总物理页数不超过 {@value #MAX_PAGES}（2,000 页）；本地不执行文本提取。</li>
  *   <li>云端智能文档分析：正文提取、版面分析与扫描件 OCR 统一委托显式配置的阿里云文档智能大模型服务（{@link DocMindPdfParser}）。</li>
  *   <li>页面覆盖与防漏页核验：严格校验云端识别完成的页面集合必须完整覆盖本地侦测到的实际总页数（兼容严格的 0 基或 1 基页清单）；缺页直接拒绝，防止扫描件因网络或识别波动导致静默丢页。</li>
- *   <li>阅读顺序与版面排序：严格按照 DocMind 版面对象的 {@code layout.index} 升序排序（要求非负、唯一且严格递增），确保多栏、图文混排文档的正确正文阅读流。</li>
+ *   <li>阅读顺序与版面排序：先按物理页码、再按 DocMind 的页内 {@code layout.index} 升序组织；页内序号必须非负且唯一，跨页允许从头编号，确保保留真实多页结果且不去重。</li>
  *   <li>标题策略与层级降级：DocMind 的 {@code layout.level} 仅表示版面排版嵌套深度，不可作为可信的文档大纲层级；因此标题版面类型标记为 {@link ContentBlockType#HEADING}，但全局标题路径 {@code headingPath} 设为 {@code null}，标题本身及跨页切换均触发硬边界（{@code boundaryBefore = true}）。</li>
  *   <li>表格与图文提取：表格块优先保留视觉大模型产出的 Markdown/HTML（保留跨行跨列合并属性），图示块在包含说明（{@code llmResult}）时保留纯文本；空白文档或不可表示的空版面明确拒绝。</li>
  *   <li>位置与偏移计算：以 {@code \n\n} 拼接构建逻辑全文，计算 UTF-16 半开区间 {@code [start_offset, end_offset)}；文档智能官方 0 基页码映射为系统 1 基物理页码（{@code pageNum + 1}）。</li>
@@ -34,6 +36,8 @@ import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
  * </ul>
  */
 public final class AlibabaPdfKnowledgeDocumentParser implements KnowledgeDocumentParser {
+    private static final Logger log = LoggerFactory.getLogger(AlibabaPdfKnowledgeDocumentParser.class);
+
     /** PDF 文档最大物理页数安全防御上限。 */
     private static final int MAX_PAGES = 2000;
     /** PDF 提取版面最大数量安全防御上限。 */
@@ -74,12 +78,17 @@ public final class AlibabaPdfKnowledgeDocumentParser implements KnowledgeDocumen
     public ParsedDocument parse(PreparedSource source) {
         if (source == null || source.format() != FileFormat.PDF
                 || source.size() == 0 || source.size() > maxSourceSize) {
+            log.warn("PDF 解析失败: stage=SOURCE_VALIDATE, inputBytes={}, maxSourceBytes={}",
+                    source == null ? null : source.size(), maxSourceSize);
             throw new IllegalArgumentException("PDF 源文件无效或超过解析限制");
         }
         byte[] pdfBytes;
         try (InputStream input = source.openStream()) {
             pdfBytes = input.readAllBytes();
         } catch (IOException exception) {
+            log.warn("PDF 解析失败: stage=SOURCE_READ, inputBytes={}, exceptionType={}, failureLocation={}",
+                    source.size(), PdfParserDiagnostics.exceptionType(exception),
+                    PdfParserDiagnostics.failureLocation(exception));
             throw new IllegalArgumentException("PDF 源文件读取失败", exception);
         }
         int pageCount;
@@ -90,17 +99,43 @@ public final class AlibabaPdfKnowledgeDocumentParser implements KnowledgeDocumen
                 throw new IllegalArgumentException("PDF 页数超过解析限制");
             }
         } catch (InvalidPasswordException exception) {
+            log.warn("PDF 解析失败: stage=PDFBOX_VALIDATE, inputBytes={}, reason=不支持加密 PDF, exceptionType={}, failureLocation={}",
+                    pdfBytes.length, PdfParserDiagnostics.exceptionType(exception),
+                    PdfParserDiagnostics.failureLocation(exception));
             throw new IllegalArgumentException("不支持加密 PDF");
         } catch (IOException exception) {
+            log.warn("PDF 解析失败: stage=PDFBOX_VALIDATE, inputBytes={}, reason=PDF 格式无效或已损坏, exceptionType={}, failureLocation={}",
+                    pdfBytes.length, PdfParserDiagnostics.exceptionType(exception),
+                    PdfParserDiagnostics.failureLocation(exception));
             throw new IllegalArgumentException("PDF 格式无效或已损坏");
+        } catch (RuntimeException exception) {
+            // 加密文件和页数超限是在预检逻辑中主动拒绝的 RuntimeException，也要保留诊断上下文。
+            log.warn("PDF 解析失败: stage=PDFBOX_VALIDATE, inputBytes={}, exceptionType={}, reason={}, failureLocation={}",
+                    pdfBytes.length, PdfParserDiagnostics.exceptionType(exception),
+                    PdfParserDiagnostics.exceptionMessage(exception), PdfParserDiagnostics.failureLocation(exception));
+            throw exception;
         }
-        Result result = docMind.parse(pdfBytes);
-        validateProcessedPages(result, pageCount);
-        return toParsedDocument(result.layouts(), pageCount);
+        String stage = "CLOUD_PARSE";
+        Result result = null;
+        try {
+            result = docMind.parse(pdfBytes);
+            stage = "PAGE_COVERAGE";
+            validateProcessedPages(result, pageCount);
+            stage = "LAYOUT_MAP";
+            return toParsedDocument(result.layouts(), pageCount);
+        } catch (RuntimeException exception) {
+            log.warn("PDF 解析失败: stage={}, pages={}, inputBytes={}, processedPages={}, layouts={}, "
+                            + "exceptionType={}, reason={}, failureLocation={}",
+                    stage, pageCount, pdfBytes.length, result == null ? null : result.processedPageIds().size(),
+                    result == null || result.layouts() == null ? null : result.layouts().size(),
+                    PdfParserDiagnostics.exceptionType(exception), PdfParserDiagnostics.exceptionMessage(exception),
+                    PdfParserDiagnostics.failureLocation(exception));
+            throw exception;
+        }
     }
 
     /**
-     * 将云端返回的版面列表按阅读顺序排序并转换为统一的结构化文档。
+     * 将云端返回的版面列表按物理页码和页内阅读序号排序，再转换为统一结构化文档。
      *
      * @param input 云端返回的原始版面列表
      * @param pageCount 本地 PDFBox 校验确认的实际总物理页数
@@ -111,16 +146,51 @@ public final class AlibabaPdfKnowledgeDocumentParser implements KnowledgeDocumen
         if (input == null || input.isEmpty() || pageCount < 1 || pageCount > MAX_PAGES || input.size() > MAX_LAYOUTS) {
             throw new IllegalArgumentException("PDF 解析结果无效或超过解析限制");
         }
-        var layouts = input.stream().filter(layout -> layout != null)
-                .sorted(Comparator.comparing(layout -> layout.index() == null ? Integer.MAX_VALUE : layout.index()))
-                .toList();
+        var layouts = input.stream().filter(layout -> layout != null).toList();
         if (layouts.size() != input.size()) throw new IllegalArgumentException("PDF 解析结果包含空版面");
-        int previousIndex = -1;
         for (var layout : layouts) {
-            if (layout.index() == null || layout.index() < 0 || layout.index() <= previousIndex) {
-                throw new IllegalArgumentException("PDF 解析结果阅读顺序无效");
+            if (layout.pageNum() == null || layout.pageNum() < 0 || layout.pageNum() >= pageCount) {
+                throw new IllegalArgumentException("PDF 解析结果页码无效");
             }
-            previousIndex = layout.index();
+        }
+
+        // 真实 DocMind 多页响应会在每页重置 index；页码先排序，index 只在页内用于阅读顺序。
+        layouts = layouts.stream()
+                .sorted(Comparator.comparing(Layout::pageNum).thenComparing(
+                        Layout::index, Comparator.nullsLast(Comparator.naturalOrder())))
+                .toList();
+        int previousValidatedPage = -1;
+        int previousValidatedIndex = -1;
+        int missingIndexCount = 0;
+        int negativeIndexCount = 0;
+        int duplicateIndexCount = 0;
+        List<String> invalidIndexSamples = new ArrayList<>();
+        for (var layout : layouts) {
+            int page = layout.pageNum();
+            Integer index = layout.index();
+            if (index == null) {
+                missingIndexCount++;
+                addIndexSample(invalidIndexSamples, page, null);
+            } else if (index < 0) {
+                negativeIndexCount++;
+                addIndexSample(invalidIndexSamples, page, index);
+            } else if (page == previousValidatedPage && index <= previousValidatedIndex) {
+                duplicateIndexCount++;
+                addIndexSample(invalidIndexSamples, page, index);
+            }
+            if (index == null || index < 0
+                    || (page == previousValidatedPage && index <= previousValidatedIndex)) {
+                continue;
+            }
+            previousValidatedPage = page;
+            previousValidatedIndex = index;
+        }
+        if (missingIndexCount > 0 || negativeIndexCount > 0 || duplicateIndexCount > 0) {
+            log.warn("PDF 页内阅读顺序字段无效: layouts={}, missingIndexCount={}, negativeIndexCount={}, "
+                            + "duplicateIndexCount={}, invalidIndexSamples={}",
+                    layouts.size(), missingIndexCount, negativeIndexCount, duplicateIndexCount,
+                    invalidIndexSamples);
+            throw new IllegalArgumentException("PDF 解析结果阅读顺序无效");
         }
 
         var blocks = new ArrayList<ContentBlock>();
@@ -135,6 +205,10 @@ public final class AlibabaPdfKnowledgeDocumentParser implements KnowledgeDocumen
             String subtype = normalize(layout.subType());
             String content = content(layout, type, subtype);
             if (content == null || content.isBlank()) {
+                // 只记录结构位置和类型，不打印 text/markdownContent/llmResult 正文。
+                log.warn("PDF 空版面: layoutIndex={}, pageNum={}, layoutType={}, layoutSubType={}",
+                        layout.index(), layout.pageNum(), PdfParserDiagnostics.identifier(type),
+                        PdfParserDiagnostics.identifier(subtype));
                 throw new IllegalArgumentException("PDF 解析结果包含无法表示的空版面");
             }
             int separatorLength = blocks.isEmpty() ? 0 : 2;
@@ -177,6 +251,19 @@ public final class AlibabaPdfKnowledgeDocumentParser implements KnowledgeDocumen
             oneBased &= result.processedPageIds().contains(page + 1);
         }
         if (!zeroBased && !oneBased) throw new IllegalArgumentException("PDF 解析结果未覆盖全部页面");
+    }
+
+    /**
+     * 仅保留少量页码和序号样例，辅助区分缺失、负值和同页重复，不记录正文。
+     *
+     * @param samples 脱敏诊断样例集合
+     * @param page 零基物理页码
+     * @param index 无效的页内版面序号，可为 {@code null}
+     */
+    private static void addIndexSample(List<String> samples, int page, Integer index) {
+        if (samples.size() < 10) {
+            samples.add(page + ":" + (index == null ? "missing" : index));
+        }
     }
 
     /**

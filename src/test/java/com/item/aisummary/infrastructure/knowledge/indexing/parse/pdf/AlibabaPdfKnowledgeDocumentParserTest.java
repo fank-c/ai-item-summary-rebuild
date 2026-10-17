@@ -7,6 +7,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.item.aisummary.application.knowledge.indexing.parse.ContentBlockType;
 import com.item.aisummary.application.knowledge.indexing.source.FileFormat;
 import com.item.aisummary.infrastructure.knowledge.indexing.parse.pdf.DocMindPdfParser.Layout;
@@ -15,7 +18,10 @@ import java.io.ByteArrayOutputStream;
 import java.util.List;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 /**
  * 阿里云文档智能（DocMind）PDF 解析策略单元测试。
@@ -23,7 +29,7 @@ import org.junit.jupiter.api.Test;
  * <p>基于隔离的 DocMindPdfParser 替身网关，测试覆盖：
  * <ul>
  *   <li>本地 PDFBox 容器防线：拦截损坏文件、加密 PDF、超页数限制（>2000 页）或 0 字节文件，且不向云端网关发起调用；</li>
- *   <li>阅读顺序与排序保障：核验版面严格按 {@code layout.index} 升序排列，拦截乱序或空版面；</li>
+ *   <li>阅读顺序与排序保障：按物理页码、页内 {@code layout.index} 排序，允许跨页序号重置并拒绝同页重复或空版面；</li>
  *   <li>页面覆盖与防丢页：核验 0 基或 1 基页面清单必须全覆盖本地实际页数，缺页时明确拒绝；</li>
  *   <li>标题与大纲降级：标题版面映射为 HEADING 块，headingPath 置空，跨页或标题触发硬边界；</li>
  *   <li>特殊排版提取：表格 HTML/Markdown 优先保留，图示说明提取，空版面拒绝；</li>
@@ -31,6 +37,20 @@ import org.junit.jupiter.api.Test;
  * </ul>
  */
 class AlibabaPdfKnowledgeDocumentParserTest {
+    /** 捕获本地预检和云端结果校验日志，避免仅验证返回异常而遗漏排查信息。 */
+    private final ListAppender<ILoggingEvent> logs = new ListAppender<>();
+    private final Logger logger = (Logger) LoggerFactory.getLogger(AlibabaPdfKnowledgeDocumentParser.class);
+
+    @BeforeEach void attachLogs() {
+        logs.start();
+        logger.addAppender(logs);
+    }
+
+    @AfterEach void detachLogs() {
+        logger.detachAppender(logs);
+        logs.stop();
+    }
+
     @Test
     void parsesScannedOrDigitalPdfThroughGatewayAndMapsPageOrderAndOffsets() throws Exception {
         byte[] bytes = pdfWithPages(2);
@@ -94,10 +114,52 @@ class AlibabaPdfKnowledgeDocumentParserTest {
         var parser = new AlibabaPdfKnowledgeDocumentParser(1024 * 1024, gateway);
         assertThatIllegalArgumentException().isThrownBy(() -> parser.parse(source(bytes, FileFormat.PDF)))
                 .withMessage("PDF 解析结果未覆盖全部页面");
+        assertThat(logs.list).extracting(ILoggingEvent::getFormattedMessage)
+                .anySatisfy(message -> assertThat(message).contains("stage=PAGE_COVERAGE", "pages=2", "processedPages=1"))
+                .allSatisfy(message -> assertThat(message).doesNotContain("仅第一页"));
         assertThatIllegalArgumentException().isThrownBy(() -> AlibabaPdfKnowledgeDocumentParser.toParsedDocument(
                 List.of(layout("正文", "text", "para", 0, 0, 0),
                         layout("重复序号", "text", "para", 0, 0, 0)), 1))
                 .withMessage("PDF 解析结果阅读顺序无效");
+        assertThatIllegalArgumentException().isThrownBy(() -> AlibabaPdfKnowledgeDocumentParser.toParsedDocument(
+                List.of(layout("缺失序号", "text", "para", 0, 0, null)), 1))
+                .withMessage("PDF 解析结果阅读顺序无效");
+        assertThat(logs.list).extracting(ILoggingEvent::getFormattedMessage)
+                .anySatisfy(message -> assertThat(message).contains(
+                        "missingIndexCount=1", "negativeIndexCount=0", "duplicateIndexCount=0",
+                        "invalidIndexSamples=[0:missing]"))
+                .allSatisfy(message -> assertThat(message).doesNotContain("缺失序号"));
+    }
+
+    @Test
+    void ordersLayoutsByPageThenPageLocalIndexWhenProviderResetsIndexAcrossPages() {
+        var parsed = AlibabaPdfKnowledgeDocumentParser.toParsedDocument(List.of(
+                layout("第二页后块", "text", "para", null, 1, 1),
+                layout("第一页后块", "text", "para", null, 0, 1),
+                layout("第二页首块", "text", "para", null, 1, 0),
+                layout("第一页首块", "text", "para", null, 0, 0)), 2);
+
+        assertThat(parsed.blocks()).extracting(block -> block.text())
+                .containsExactly("第一页首块", "第一页后块", "第二页首块", "第二页后块");
+        assertThat(parsed.blocks()).extracting(block -> block.source().pageStart())
+                .containsExactly(1, 1, 2, 2);
+        assertThat(parsed.blocks()).extracting(block -> block.source().startOffset())
+                .containsExactly(0, "第一页首块\n\n".length(), "第一页首块\n\n第一页后块\n\n".length(),
+                        "第一页首块\n\n第一页后块\n\n第二页首块\n\n".length());
+        assertThat(parsed.blocks().get(2).boundaryBefore()).isTrue();
+    }
+
+    @Test
+    void rejectsDuplicatePageLocalIndexesEvenWhenPagesAreValid() {
+        assertThatIllegalArgumentException().isThrownBy(() -> AlibabaPdfKnowledgeDocumentParser.toParsedDocument(
+                List.of(layout("同页首块", "text", "para", null, 0, 2),
+                        layout("同页重复块", "text", "para", null, 0, 2)), 1))
+                .withMessage("PDF 解析结果阅读顺序无效");
+        assertThat(logs.list).extracting(ILoggingEvent::getFormattedMessage)
+                .anySatisfy(message -> assertThat(message).contains(
+                        "missingIndexCount=0", "negativeIndexCount=0", "duplicateIndexCount=1",
+                        "invalidIndexSamples=[0:2]"))
+                .allSatisfy(message -> assertThat(message).doesNotContain("同页首块", "同页重复块"));
     }
 
     @Test
@@ -117,6 +179,10 @@ class AlibabaPdfKnowledgeDocumentParserTest {
 
         assertThatIllegalArgumentException().isThrownBy(() -> parser.parse(source("not pdf", FileFormat.PDF)))
                 .withMessage("PDF 格式无效或已损坏");
+        assertThat(logs.list).extracting(ILoggingEvent::getFormattedMessage)
+                .anySatisfy(message -> assertThat(message).contains("stage=PDFBOX_VALIDATE", "java.io.IOException", "failureLocation="))
+                .allSatisfy(message -> assertThat(message).doesNotContain("not pdf"));
+        assertThat(logs.list).allSatisfy(event -> assertThat(event.getThrowableProxy()).isNull());
         verifyNoInteractions(gateway);
         assertThatIllegalArgumentException().isThrownBy(() -> parser.parse(source("text", FileFormat.TXT)))
                 .withMessage("PDF 源文件无效或超过解析限制");
