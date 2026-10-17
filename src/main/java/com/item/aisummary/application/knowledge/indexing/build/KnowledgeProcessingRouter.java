@@ -66,11 +66,13 @@ public final class KnowledgeProcessingRouter {
      *
      * @param format 源文件格式
      * @return 对应的文档解析策略
-     * @throws IllegalStateException 当该格式未注册解析策略时抛出
+     * @throws KnowledgeBuildUnavailableException 当该格式未注册解析策略时抛出
      */
     public KnowledgeDocumentParser requireParser(FileFormat format) {
         var parser = format == null ? null : parsers.get(format);
-        if (parser == null) throw new IllegalStateException("源格式没有已注册的解析策略");
+        if (parser == null) {
+            throw new KnowledgeBuildUnavailableException("KNOWLEDGE_PARSER_UNAVAILABLE", "源格式没有已注册的解析策略");
+        }
         return parser;
     }
 
@@ -79,11 +81,13 @@ public final class KnowledgeProcessingRouter {
      *
      * @param mode 内容分块模式
      * @return 对应的分块策略
-     * @throws IllegalStateException 当该模式未注册分块策略时抛出
+     * @throws KnowledgeBuildUnavailableException 当该模式未注册分块策略时抛出
      */
     public KnowledgeChunker requireChunker(ChunkingMode mode) {
         var chunker = mode == null ? null : chunkers.get(mode);
-        if (chunker == null) throw new IllegalStateException("分块模式没有已注册的分块策略");
+        if (chunker == null) {
+            throw new KnowledgeBuildUnavailableException("KNOWLEDGE_CHUNKER_UNAVAILABLE", "分块模式没有已注册的分块策略");
+        }
         return chunker;
     }
 }

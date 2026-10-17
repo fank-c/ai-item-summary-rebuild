@@ -1,6 +1,6 @@
 package com.item.aisummary.domain.knowledge.exception;
 
-/** 内部关联或详情查询未找到；尚未定义知识库 HTTP 错误映射。 */
+/** 知识库关联或详情资源不存在；由调用边界决定协议响应，不包含持久化细节。 */
 public final class KnowledgeNotFoundException extends RuntimeException {
 
     /**

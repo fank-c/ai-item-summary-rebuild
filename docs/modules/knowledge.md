@@ -10,7 +10,7 @@
 
 解析器统一输出 `ParsedDocument`，切分器支持 FLAT 与 PARENT_CHILD。Markdown 直接使用 CommonMark 并保留源文与位置，不使用会重新拼接正文的 reader；Token 预算使用本地 JTokkit CL100K_BASE。依赖版本以 [pom.xml](../../pom.xml) 为准。
 
-没有知识库 HTTP、权限管理、删除、异步任务、检索、聊天或重排序。文件归属检查不等于知识库授权。MySQL 保存权威版本状态；向量索引是外部派生数据，两者没有共同事务。
+没有知识库权限管理、删除、异步任务、检索、聊天或重排序。知识库现已提供 12 个 HTTP 接口（覆盖知识库创建/查询/改名、文档登记与查询、文档同步构建、版本与切片只读查询；完整公开合同集中维护在 [HTTP API](../reference/api.md#知识库接口)）。文件归属检查不等于知识库授权。MySQL 保存权威版本状态；向量索引是外部派生数据，两者没有共同事务。
 
 ## 内部调用方式
 
@@ -27,7 +27,22 @@
 
 构建入口和组 writer 仅在 RAG 开启时装配。`KnowledgeParserConfiguration`、`KnowledgeChunkerConfiguration` 分别注册本地解析器和切分器；`DocMindParserConfiguration` 还要求显式开启云解析；`KnowledgeRagConfiguration` 检查外部后端与策略依赖，缺失时拒绝启动。开关及条件见 [配置说明](../reference/configuration.md#rag-构建配置)。
 
-通过 Spring 注入的代理使用构建服务，不能自行 `new` 事务服务或在外层事务中调用 `build`。构建方法使用 `Propagation.NEVER`；构建生命周期与片段写入各自在短事务中执行。组 writer 本身没有事务注解，通过注入的 Spring `KnowledgeChunkService` 代理调用一次 `saveBatch`，由基础服务事务边界保障整批原子写入。构建结果与异常均为内部 Java 合同，当前没有公开 HTTP 错误映射。
+通过 Spring 注入的代理使用构建服务，不能自行 `new` 事务服务或在外层事务中调用 `build`。构建方法使用 `Propagation.NEVER`；构建生命周期与片段写入各自在短事务中执行。组 writer 本身没有事务注解，通过注入的 Spring `KnowledgeChunkService` 代理调用一次 `saveBatch`，由基础服务事务边界保障整批原子写入。构建结果与异常已通过 Web 控制器和统一错误边界映射为标准 HTTP 响应，公开 HTTP 合同集中在 [HTTP API](../reference/api.md#知识库接口)。
+
+### HTTP 接口与工程边界
+
+知识库现已在 Web 层提供 12 个公开 HTTP 接口（全部位于 `/api/v1/knowledge-bases`、`/api/v1/knowledge-documents`、`/api/v1/knowledge-revisions`、`/api/v1/knowledge-chunks` 路径下），各接口详细字段与请求响应合同见 [HTTP API](../reference/api.md#知识库接口)。模块设计遵循以下边界：
+
+- **身份与授权边界**：所有 12 个接口均通过 `LoginUserContext.require` 要求已绑定请求身份，默认使用模拟身份 `mock-user`；关闭模拟身份后返回 `401`（`AUTHENTICATION_REQUIRED`）。当前为学习工程阶段，尚未实现知识库专用的访问控制或多租户隔离模型。现有源文件所有权检查仅在“文档登记”与“文档同步构建”时用于校验操作者对源文件的合法归属；其余知识库、文档、版本和切片正文查询对任何已绑定身份可用，明确属于当前学习工程边界，不声称已授权。
+- **生命周期驱动边界**：基础版本创建（`KnowledgeRevisionService.create`）与基础片段批量持久化（`KnowledgeChunkService.saveBatch`）仅供内部服务使用，不暴露 HTTP 接口。外部驱动文档版本创建与切片构建的生命周期只能通过 `POST /api/v1/knowledge-documents/{documentId}/builds` 进行。
+- **构建同步性与重试风险**：构建接口返回 200 完成事实（`KnowledgeBuildResponse`）。请求体可省略、`{}` 或 `{"mode": null}` 默认采用 `FLAT`，显式提交时仅接受大写枚举 `FLAT` 或 `PARENT_CHILD`，提交非法 JSON/枚举返回 `400`。同步构建过程可能耗时较长，客户端 HTTP 超时或网络断开不代表服务端构建已撤销，避免盲目重复调用（会导致生成新版本并可能产生云端解析费用）；重试前应先查询文档及其版本列表确认上一版本状态。
+- **切片只读与检索区别**：片段列表接口返回该版本下的所有角色片段（既包含用于检索的 `RETRIEVAL`，也包含仅入库作为父上下文的 `CONTEXT` 父块），且支持查看任意状态版本（包含历史替代版本）。这只是构建产物的只读查看，并非向量检索接口（语义检索接口尚未实现）。
+- **统一错误映射边界**：知识库异常统一由 [GlobalExceptionHandler](../../src/main/java/com/item/aisummary/web/error/GlobalExceptionHandler.java) 转换为标准 ProblemDetail：
+  - RAG 关闭返回 `503` `KNOWLEDGE_RAG_DISABLED`；
+  - 未注册解析策略或分块策略返回 `503` `KNOWLEDGE_PARSER_UNAVAILABLE` 或 `KNOWLEDGE_CHUNKER_UNAVAILABLE`；
+  - 资源未找到返回 `404` `RESOURCE_NOT_FOUND`；
+  - 业务冲突返回 `409` `exception.code`（如登记重复 `DOCUMENT_ALREADY_REGISTERED`、构建互斥 `BUILD_ALREADY_RUNNING`、版本号冲突 `REVISION_NUMBER_CONFLICT` 等）；
+  - 构建各阶段失败（`KnowledgeBuildException`）：源文件读取与向量后端返回 `502`，文档解析与切分拒绝输入返回 `422`，数据库持久化与版本发布失败返回 `500`；错误码为 `exception.code`，`detail` 固定为阶段安全中文摘要（`stage.safeMessage`），并携带 `stage` 与 `cleanupCompleted` 扩展字段。特别地，发布（`PUBLISH`）阶段失败时向量保留待核对，**不能声称或视为操作已回滚**。详细合同见 [HTTP API](../reference/api.md#错误响应)。
 
 ### 登记与基础服务规则
 

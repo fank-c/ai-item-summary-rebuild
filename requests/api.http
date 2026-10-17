@@ -1,0 +1,217 @@
+# VS Code REST Client（humao.rest-client）请求测试。
+# 启动应用后，按顺序点击各请求上方的 Send Request；请求不会自动批量执行。
+# 用户接口需要数据库；文件接口还需启用并配置对应对象存储适配器。
+# 默认模拟身份为 mock-user，创建用户不会切换文件操作身份。
+# 示例密码仅用于本地测试；预期状态写在注释中，REST Client 不自动执行断言。
+
+@baseUrl = http://localhost:8000
+@requestId = rest-client-demo-001
+@storageType = aliyun
+# 以下 ID 来自命名请求的最近一次响应，先成功执行创建或上传请求。
+@userId = {{createUser.response.body.$.id}}
+@fileId = {{uploadFile.response.body.$.id}}
+@knowledgeBaseId = {{createKnowledgeBase.response.body.$.id}}
+@knowledgeDocumentId = {{registerKnowledgeDocument.response.body.$.id}}
+@knowledgeRevisionId = {{buildKnowledgeDocument.response.body.$.revisionId}}
+@knowledgeChunkId = {{listKnowledgeChunks.response.body.$[0].id}}
+
+### 健康检查
+# 仅检查 HTTP 进程是否可响应，不检查数据库、对象存储或模型。
+GET {{baseUrl}}/api/health
+X-Request-Id: {{requestId}}
+
+### 创建用户
+# @name createUser
+POST {{baseUrl}}/api/users
+Content-Type: application/json
+X-Request-Id: user-create-001
+
+{
+  "name": "REST Client User",
+  "email": "rest-client-user@example.test",
+  "password": "demo-password-123"
+}
+
+### 查询用户列表
+GET {{baseUrl}}/api/users
+X-Request-Id: user-list-001
+
+### 查询刚创建的用户
+# REST Client 会从 createUser 的响应中读取用户 ID。
+GET {{baseUrl}}/api/users/{{userId}}
+X-Request-Id: user-detail-001
+
+### 修改用户资料并保留原密码
+PUT {{baseUrl}}/api/users/{{userId}}
+Content-Type: application/json
+X-Request-Id: user-update-001
+
+{
+  "name": "REST Client User Updated",
+  "email": "rest-client-user.updated@example.test",
+  "password": null
+}
+
+### 修改用户资料并设置新密码
+# 可选：在删除用户前执行，预期响应 200；名称和邮箱仍须同时提交。
+PUT {{baseUrl}}/api/users/{{userId}}
+Content-Type: application/json
+X-Request-Id: user-password-update-001
+
+{
+  "name": "REST Client User Updated",
+  "email": "rest-client-user.updated@example.test",
+  "password": "new-demo-password-123"
+}
+
+### 删除用户
+# 预期响应 204，无响应体；仅删除本文件 createUser 请求创建的用户。
+DELETE {{baseUrl}}/api/users/{{userId}}
+X-Request-Id: user-delete-001
+
+### 验证用户删除后不可查询
+# 预期响应：404 RESOURCE_NOT_FOUND
+GET {{baseUrl}}/api/users/{{userId}}
+X-Request-Id: user-deleted-detail-001
+
+### 上传 Markdown 文件
+# 前置条件：配置并启用 minio，或将 @storageType 改为 aliyun 并配置对应适配器。
+# 上传内容为相对于本 .http 文件的 ../README.md；成功响应 201。
+# 默认对象存储全部关闭，此时上传预期为 400 FILE_VALIDATION_ERROR。
+# @name uploadFile
+POST {{baseUrl}}/api/files?storageType={{storageType}}
+Content-Type: multipart/form-data; boundary=RestClientBoundary
+X-Request-Id: file-upload-001
+
+--RestClientBoundary
+Content-Disposition: form-data; name="file"; filename="rest-client-sample.md"
+Content-Type: text/markdown
+
+< ../AGENTS.md
+--RestClientBoundary--
+
+### 获取刚上传文件的下载地址
+# 预期响应 200，返回 url 和 expiresAt；可打开 url 下载，删除前使用。
+GET {{baseUrl}}/api/files/{{fileId}}/download-url
+X-Request-Id: file-download-url-001
+
+### 创建知识库
+# 前置条件：APP_AUTH_MOCK_ENABLED=true（默认），并已配置 MySQL 和知识库表。
+# 预期响应 201，并返回 Location；知识库接口不接收客户端 ownerUserId。
+# @name createKnowledgeBase
+POST {{baseUrl}}/api/v1/knowledge-bases
+Content-Type: application/json
+X-Request-Id: knowledge-base-create-001
+
+{
+  "name": "REST Client Knowledge Base"
+}
+
+### 查询知识库列表
+# 预期响应 200；无数据时返回 []，列表无分页且顺序不保证。
+GET {{baseUrl}}/api/v1/knowledge-bases
+X-Request-Id: knowledge-base-list-001
+
+### 查询刚创建的知识库
+GET {{baseUrl}}/api/v1/knowledge-bases/{{knowledgeBaseId}}
+X-Request-Id: knowledge-base-detail-001
+
+### 修改知识库名称
+# 预期响应 200；只修改名称，状态和创建时间由服务端保留。
+PUT {{baseUrl}}/api/v1/knowledge-bases/{{knowledgeBaseId}}
+Content-Type: application/json
+X-Request-Id: knowledge-base-rename-001
+
+{
+  "name": "REST Client Knowledge Base Updated"
+}
+
+### 登记刚上传的文件为知识文档
+# 文件必须属于当前模拟身份、未删除、status=1 且 uploadStatus=completed。
+# 登记只建立 pending 文档关系，不读取文件正文，也不自动触发构建。
+# @name registerKnowledgeDocument
+POST {{baseUrl}}/api/v1/knowledge-bases/{{knowledgeBaseId}}/documents
+Content-Type: application/json
+X-Request-Id: knowledge-document-register-001
+
+{
+  "fileId": "{{fileId}}"
+}
+
+### 查询知识库下的文档列表
+# 预期响应 200；知识库存在但没有文档时返回 []。
+GET {{baseUrl}}/api/v1/knowledge-bases/{{knowledgeBaseId}}/documents
+X-Request-Id: knowledge-document-list-001
+
+### 查询刚登记的知识文档
+# 预期响应 200，初始 indexStatus 为 pending，activeRevisionId 为 null。
+GET {{baseUrl}}/api/v1/knowledge-documents/{{knowledgeDocumentId}}
+X-Request-Id: knowledge-document-detail-001
+
+### 同步构建并发布知识文档
+# 前置条件：APP_KNOWLEDGE_RAG_ENABLED=true，并配置 OpenAI 兼容 Embedding、Qdrant 和对应 Bean。
+# 请求体省略、{} 或 mode=null 都使用 FLAT；此处显式发送 FLAT，预期成功响应 200。
+# 构建可能耗时较长，客户端超时或断开不代表服务端已停止；重试前先查询文档和版本状态。
+# @name buildKnowledgeDocument
+POST {{baseUrl}}/api/v1/knowledge-documents/{{knowledgeDocumentId}}/builds
+Content-Type: application/json
+X-Request-Id: knowledge-document-build-001
+
+{
+  "mode": "FLAT"
+}
+
+### 查询知识文档的全部版本
+# 预期响应 200，按 revisionNumber 升序；包含所有生命周期状态。
+# @name listKnowledgeRevisions
+GET {{baseUrl}}/api/v1/knowledge-documents/{{knowledgeDocumentId}}/revisions
+X-Request-Id: knowledge-revision-list-001
+
+### 查询刚发布的版本
+GET {{baseUrl}}/api/v1/knowledge-revisions/{{knowledgeRevisionId}}
+X-Request-Id: knowledge-revision-detail-001
+
+### 查询版本中的全部片段
+# 预期响应 200，按 sequenceNo 升序；结果包含 CONTEXT 和 RETRIEVAL 角色。
+# @name listKnowledgeChunks
+GET {{baseUrl}}/api/v1/knowledge-revisions/{{knowledgeRevisionId}}/chunks
+X-Request-Id: knowledge-chunk-list-001
+
+### 查询单个知识片段
+# 仅在上一个请求至少返回一个片段时执行；构建产生空片段时此变量无法解析。
+GET {{baseUrl}}/api/v1/knowledge-chunks/{{knowledgeChunkId}}
+X-Request-Id: knowledge-chunk-detail-001
+
+### 可选：使用 PARENT_CHILD 模式再次构建
+# 该请求会创建新的版本，不要在默认 FLAT 构建后无意重复执行。
+# 父上下文片段只保存到 MySQL，RETRIEVAL 子片段才写入向量库。
+POST {{baseUrl}}/api/v1/knowledge-documents/{{knowledgeDocumentId}}/builds
+Content-Type: application/json
+X-Request-Id: knowledge-document-build-parent-child-001
+
+{
+  "mode": "PARENT_CHILD"
+}
+
+### 删除刚上传的文件
+# 预期响应 204，无响应体；同时删除对象存储中的本次上传对象。
+DELETE {{baseUrl}}/api/files/{{fileId}}
+X-Request-Id: file-delete-001
+
+### 验证文件删除后无法再次获取下载地址
+# 预期响应：404 RESOURCE_NOT_FOUND
+GET {{baseUrl}}/api/files/{{fileId}}/download-url
+X-Request-Id: file-deleted-download-url-001
+
+### 错误请求示例：缺少必填用户字段
+# 预期响应：400 REQUEST_VALIDATION_ERROR
+POST {{baseUrl}}/api/users
+Content-Type: application/json
+X-Request-Id: error-validation-001
+
+{
+  "name": "",
+  "email": "not-an-email",
+  "password": ""
+}
+

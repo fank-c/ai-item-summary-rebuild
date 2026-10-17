@@ -2,6 +2,10 @@ package com.item.aisummary.web.error;
 
 import com.item.aisummary.application.auth.AuthenticationRequiredException;
 import com.item.aisummary.application.file.port.ObjectStorageException;
+import com.item.aisummary.application.knowledge.indexing.build.KnowledgeBuildException;
+import com.item.aisummary.application.knowledge.indexing.build.KnowledgeBuildUnavailableException;
+import com.item.aisummary.domain.knowledge.exception.KnowledgeConflictException;
+import com.item.aisummary.domain.knowledge.exception.KnowledgeNotFoundException;
 import com.item.aisummary.domain.file.exception.FileNotFoundException;
 import com.item.aisummary.domain.file.exception.FileValidationException;
 import com.item.aisummary.domain.user.exception.UserNotFoundException;
@@ -143,6 +147,41 @@ public class GlobalExceptionHandler {
                 request);
     }
 
+    /** 知识库登记重复或构建互斥等业务冲突；保留稳定冲突码，不展开数据库原因。 */
+    @ExceptionHandler(KnowledgeConflictException.class)
+    public ResponseEntity<ProblemDetail> knowledgeConflict(
+            KnowledgeConflictException exception, HttpServletRequest request) {
+        return response(HttpStatus.CONFLICT, exception.code(), "知识库操作冲突", exception.getMessage(), request);
+    }
+
+    /** RAG 关闭或所需解析、切分策略未启用；请求尚未进入版本构建。 */
+    @ExceptionHandler(KnowledgeBuildUnavailableException.class)
+    public ResponseEntity<ProblemDetail> knowledgeUnavailable(
+            KnowledgeBuildUnavailableException exception, HttpServletRequest request) {
+        return response(HttpStatus.SERVICE_UNAVAILABLE, exception.code(), "知识库构建不可用", exception.getMessage(), request);
+    }
+
+    /**
+     * 将构建阶段失败转换为 HTTP 错误；只使用阶段固定摘要，不回显 cause 或策略异常正文。
+     *
+     * <p>读取和向量后端失败返回 502，解析和切分拒绝输入返回 422，持久化和发布失败返回 500。
+     * cleanupCompleted 仅表示失败版本的派生向量清理已被确认；发布结果不明时仍需查询核对。
+     */
+    @ExceptionHandler(KnowledgeBuildException.class)
+    public ResponseEntity<ProblemDetail> knowledgeBuild(
+            KnowledgeBuildException exception, HttpServletRequest request) {
+        HttpStatus status = switch (exception.stage()) {
+            case SOURCE_READ, VECTOR_WRITE -> HttpStatus.BAD_GATEWAY;
+            case PARSE, CHUNK -> HttpStatus.UNPROCESSABLE_CONTENT;
+            case CHUNK_SAVE, PUBLISH -> HttpStatus.INTERNAL_SERVER_ERROR;
+        };
+        ProblemDetail problem = problem(status, exception.code(), "知识库构建失败",
+                exception.stage().safeMessage(), request);
+        problem.setProperty("stage", exception.stage().name());
+        problem.setProperty("cleanupCompleted", exception.cleanupCompleted());
+        return ResponseEntity.status(status).body(problem);
+    }
+
     /**
      * 处理常规参数非法异常。
      *
@@ -196,7 +235,7 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * 处理用户未找到、文件未找到以及 Spring MVC 静态资源未找到异常。
+     * 处理用户、文件、知识库资源及 Spring MVC 静态资源未找到异常。
      *
      * <p>统一返回 HTTP 404 Not Found，错误码为 RESOURCE_NOT_FOUND。
      *
@@ -207,6 +246,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler({
         UserNotFoundException.class,
         FileNotFoundException.class,
+        KnowledgeNotFoundException.class,
         NoResourceFoundException.class
     })
     public ResponseEntity<ProblemDetail> notFound(Exception exception, HttpServletRequest request) {

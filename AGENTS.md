@@ -16,7 +16,7 @@
 
 实现应优先通过清晰的代码合同和行为测试表达边界；只有在确有复用价值或用户明确需要时才补充项目说明。优先保持实现简单、边界清晰，只有在功能确实需要时才引入数据库、向量数据库、鉴权或生产级治理能力。
 
-当前阶段维护基础工程、用户、核心文件、知识库基础服务、本地 TXT/Markdown/DOCX 生产文档解析器、基于阿里云文档智能的可选 PDF 云端解析器、TokenBudgetKnowledgeChunker（FLAT 与 PARENT_CHILD 模式）和固定 RAG 构建骨架：用户资料 CRUD、BCrypt 密码摘要、跨模块用户存在性查询、模拟请求身份、公共错误处理，文件上传、下载签名、删除、内部内容读取，以及知识库四表、片段父子字段、策略 ports、源字节读取、组式保存、向量适配、构建生命周期与版本发布。RAG 默认关闭，显式开启但缺 OpenAI Embedding、Qdrant 等外部依赖或配套 Bean 时拒绝启动。本地解析器与切分器行为由单元测试真实调用覆盖，DocMind 网关由无网络 Mock 单测覆盖，构建编排与本地发布行为由 KnowledgeChunkingBuildIntegrationTest（真实本地 parser/chunker、H2 Mapper/发布与文件/云/向量替身）等测试覆盖；真实 MySQL、OpenAI/Qdrant 外部调用及真实云端 DocMind 尚未验收。元数据使用 MySQL；文件存储可选 MinIO 或阿里云 OSS。真实登录、权限、账户启停、客户端直传、可用性框架、知识库 HTTP、异步任务、检索和问答不在本阶段范围。新增其他基础设施或业务前，必须有明确的用户需求。
+当前阶段维护基础工程、用户、核心文件、知识库基础服务、本地 TXT/Markdown/DOCX 生产文档解析器、基于阿里云文档智能的可选 PDF 云端解析器、TokenBudgetKnowledgeChunker（FLAT 与 PARENT_CHILD 模式）和固定 RAG 构建骨架：用户资料 CRUD、BCrypt 密码摘要、跨模块用户存在性查询、模拟请求身份、公共错误处理，文件上传、下载签名、删除、内部内容读取，以及知识库四表、片段父子字段、策略 ports、源字节读取、组式保存、向量适配、构建生命周期与版本发布。RAG 默认关闭，显式开启但缺 OpenAI Embedding、Qdrant 等外部依赖或配套 Bean 时拒绝启动。本地解析器与切分器行为由单元测试真实调用覆盖，DocMind 网关由无网络 Mock 单测覆盖，构建编排与本地发布行为由 KnowledgeChunkingBuildIntegrationTest（真实本地 parser/chunker、H2 Mapper/发布与文件/云/向量替身）等测试覆盖；真实 MySQL、OpenAI/Qdrant 外部调用及真实云端 DocMind 尚未验收。元数据使用 MySQL；文件存储可选 MinIO 或阿里云 OSS。真实登录认证系统、知识库独立权限控制、删除文档/知识库接口、账户启停、客户端直传、可用性治理、异步任务、检索和问答不在本阶段范围。知识库现已提供 12 个 HTTP 接口（覆盖知识库创建/查询/改名、文档登记与查询、文档同步构建、版本与切片只读查询；公开 HTTP 合同集中维护在 docs/reference/api.md）。新增其他基础设施或业务前，必须有明确的用户需求。
 
 ## 技术基线
 
@@ -51,6 +51,7 @@ src/main/java/com/item/aisummary/
 │   ├── health/        # 健康检查
 │   ├── user/          # controller、request、response
 │   ├── file/          # controller、response、upload
+│   ├── knowledge/     # controller、request、response（12 个 HTTP 接口）
 │   └── error/         # ProblemDetail 公共异常映射
 ├── application/
 │   ├── user/          # service、command、result、port、reference
@@ -286,7 +287,11 @@ SDK 超时要求正整数毫秒且不超过 Integer.MAX_VALUE 毫秒；不保证
 
 ## 知识库基础服务与表结构约定
 
-- 已实现知识库四表领域、MyBatis 持久化、内部基础服务和固定 RAG 构建骨架，包括策略 ports、原字节读取、组式片段保存、向量适配与版本发布。当前已提供本地 TXT、Markdown 和 DOCX（Apache POI 5.4.1）生产文档解析器，以及基于阿里云文档智能（`docmind_api20220711:2.0.14` + Apache PDFBox 3.0.5 校验容器）的可选 PDF 云端解析器，与 TokenBudgetKnowledgeChunker（FLAT 与 PARENT_CHILD 两模式）；所有解析器输出统一的 `ParsedDocument`，无 schema 变更。RAG 默认关闭，开启但缺 OpenAI Embedding、Qdrant 等外部依赖或配套 Bean 时仍拒绝启动。内部调用与数据合同由源码和行为测试表达。没有知识库 HTTP、权限、删除、异步任务、检索或聊天。
+- 已实现知识库四表领域、MyBatis 持久化、内部基础服务、固定 RAG 构建骨架以及 12 个公开 HTTP 接口，包括策略 ports、原字节读取、组式片段保存、向量适配与版本发布。当前已提供本地 TXT、Markdown 和 DOCX（Apache POI 5.4.1）生产文档解析器，以及基于阿里云文档智能（`docmind_api20220711:2.0.14` + Apache PDFBox 3.0.5 校验容器）的可选 PDF 云端解析器，与 TokenBudgetKnowledgeChunker（FLAT 与 PARENT_CHILD 两模式）；所有解析器输出统一的 `ParsedDocument`，无 schema 变更。RAG 默认关闭，开启但缺 OpenAI Embedding、Qdrant 等外部依赖或配套 Bean 时仍拒绝启动。当前没有知识库权限访问控制、删除、异步任务、向量检索或聊天。
+- 知识库公开 12 个 HTTP 接口，全部采用 `/api/v1/knowledge-bases`、`/api/v1/knowledge-documents`、`/api/v1/knowledge-revisions`、`/api/v1/knowledge-chunks` 路径前缀（知识库创建/查询/改名、文档登记/查询与同步 build、版本只读、切片只读），公开契约集中在 `docs/reference/api.md`。全部接口均 require `LoginUserContext`，无知识库访问控制，默认 `mock-user`；关闭模拟身份后返回 401（`AUTHENTICATION_REQUIRED`）。现有源文件归属用于文档登记与同步构建，其余元数据和正文查询对任何已绑定身份可用；明确属于当前学习工程边界，不声称已授权。
+- 基础版本创建（`KnowledgeRevisionService.create`）与片段批量保存（`KnowledgeChunkService.saveBatch`）不暴露 HTTP，文档版本生命周期只能通过 `POST /api/v1/knowledge-documents/{documentId}/builds` 驱动。build 接口返回 200 完成事实（`KnowledgeBuildResponse`）；请求体可无 body、`{}` 或 `mode: null` 默认 `FLAT`，显式指定仅支持大写枚举 `FLAT` 或 `PARENT_CHILD`，提交非法 JSON/枚举返回 400。同步构建可能耗时较长，客户端 HTTP 超时或断开连接不代表服务端执行已撤销，避免盲目重复调用（会导致新版本序号与可能产生云端解析费用），重试前应先查询文档及其版本列表。
+- 路径 ID 经 trim 后非空且不超过 32 字符，无 UUID 格式强校验；创建/修改知识库 name 原输入 `@NotBlank @Size(max = 100)`；登记文档 fileId 原输入 `@NotBlank @Size(max = 32)`。查询列表均无分页；版本按版本号升序；片段按全局序号升序返回该版本所有角色片段（CONTEXT 与 RETRIEVAL）与任意状态版本，并非向量检索接口；`headingPath` 未知为 `null`、无标题为 `[]`，`startOffset/endOffset` 无法可靠映射时为 `null`，`sequenceNo` 为版本内全局唯一序号。
+- 统一错误边界：关闭 RAG 时返回 503 `KNOWLEDGE_RAG_DISABLED`；无对应 parser/chunker 策略返回 503 `KNOWLEDGE_PARSER_UNAVAILABLE` / `KNOWLEDGE_CHUNKER_UNAVAILABLE`；资源未找到返回 404 `RESOURCE_NOT_FOUND`；业务冲突返回 409 `exception.code`（如 `DOCUMENT_ALREADY_REGISTERED`、`BUILD_ALREADY_RUNNING`、`REVISION_NUMBER_CONFLICT` 等）；构建各阶段异常映射：读取/向量 502、解析/切分 422、持久化/发布 500，code 为 `exception.code`，detail 固定为阶段安全摘要（`stage.safeMessage`），ProblemDetail 携带 `stage` 与 `cleanupCompleted` 扩展属性；特别地，发布（`PUBLISH`）阶段失败时向量保留待核对，不能说回滚。
 - 服务按用例组织，无 Service/Impl 套层。`KnowledgeBaseService` 创建、详情、列表和改名；名称 trim 后非空白且最多 100 个 Java 字符，允许多库同名。业务 ID 为 32 位 UUID，时钟复用现有 Clock 并截断到微秒。
 - `KnowledgeDocumentService.register(actorUserId,knowledgeBaseId,fileId)` 先校验显式身份及库存在，再通过 `FileContentService.requireOwnedProcessable` 校验源文件。只查询元数据；不得读取正文、调用文件 Mapper 或将文件归属视为知识库授权。新文档 status=1、index_status=pending，活动版本和失败摘要为空。
 - 重复库内文件登记报 `DOCUMENT_ALREADY_REGISTERED`，数据库唯一索引兜底。`KnowledgeRevisionService.create(documentId)` 先确认文档存在，使用 MAX + 1 创建 building 版本；竞争报 `REVISION_NUMBER_CONFLICT`，达到 int 上限报 `REVISION_NUMBER_EXHAUSTED`，不自动重试。新版本 chunk_count=0，created_at/started_at 为进入 building 的时间，摘要、失败信息和其他生命周期时间为空，不修改文档活动版本。
@@ -297,7 +302,7 @@ SDK 超时要求正整数毫秒且不超过 Integer.MAX_VALUE 毫秒；不保证
 - `heading_path` 保持有序标题列表，标题层级为正、标题非空白；JSON NULL 与空数组分别还原。使用既有 Jackson 3 和专用类型处理器；MySQL 绑定 JSON 文本，H2 绑定原生 UTF-8 JSON 字节，避免把数组保存成字符串。
 - `SourceLocation` 保持在 `domain.knowledge.value`；`KnowledgeRules.requireLocation` 集中校验偏移与页码约束，供值对象和片段校验复用。知识领域字段及持久化仍为现有扁平 `start_offset/end_offset/page_start/page_end`，不引入位置嵌套列或 schema 变化。
 - token_count 可空，有值时非负，表示本行正文的计数，不累计子块。偏移同时空或满足 0 <= start_offset < end_offset，父子使用同一处理后全文 UTF-16 参照而非父块内偏移，无法可靠映射时为空；页码同时空或满足 1 <= page_start <= page_end。正文保留原样，不以片段长度限制全文偏移，不填充估算的 Token 数量或虚构位置。
-- 详情与按关联列表查询对不存在的关联抛 `KnowledgeNotFoundException`；合法但无子记录时返回空列表。版本按版本号升序、片段按 sequence_no 升序。内部异常尚未定义公开 HTTP 错误合同。
+- 详情与按关联列表查询对不存在的关联抛 `KnowledgeNotFoundException`；合法但无子记录时返回空列表。版本按版本号升序、片段按 sequence_no 升序。业务异常由全局异常处理器映射为标准 ProblemDetail，公开 HTTP 契约集中维护在 `docs/reference/api.md`。
 - 知识库只保存自身信息，移除 `owner_user_id` 及其唯一索引。用户访问关系留待后续权限表管理，本次不创建权限表，也不将缺少所有者字段解释为公开访问。
 - 保留库内文件唯一、文档内版本号唯一、版本内片段序号唯一。沿用逻辑关联，不新增物理外键或级联删除；文件归属与活动版本一致性仍需业务校验。
 - 版本表保留整体状态、失败摘要、源文件摘要、片段数量和时间。不保存 `parser_strategy`、`chunking_strategy`、`chunk_size`、`chunk_overlap`、`quality_status`、`normalization_strategy`、`vector_route_key`，片段表同样不保存切片策略；旧实体和 Mapper 不可原样迁入。

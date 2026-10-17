@@ -25,7 +25,7 @@ flowchart LR
 
 ## 包结构与命名
 
-普通业务按“层 → 业务 → 职责”组织，例如 `web.user.controller`、`application.file.service`、`domain.knowledge.value`。请求、用例输入、领域数据和数据库实体各自归位，不集中到通用 DTO 包。MyBatis 适配按 `persistence.entity / mapper / repository / typehandler` 分包。
+普通业务按“层 → 业务 → 职责”组织，例如 `web.user.controller`、`web.knowledge.controller`、`application.file.service`、`domain.knowledge.value`。请求、用例输入、领域数据和数据库实体各自归位，不集中到通用 DTO 包。Web 层现已包含用户、文件、健康检查以及知识库模块的控制器、请求体和响应模型。MyBatis 适配按 `persistence.entity / mapper / repository / typehandler` 分包。
 
 知识库基础服务位于 `application.knowledge.service`，保存命令和仓储接口分别位于 `command`、`port`。RAG 专用能力聚合在 `application.knowledge.indexing`：
 
@@ -45,15 +45,15 @@ flowchart LR
 
 [LoginUserContext](../../src/main/java/com/item/aisummary/infrastructure/auth/web/LoginUserContext.java) 从请求属性取得当前身份。默认模拟身份仅作用于 `/api/**` 非 OPTIONS 请求，结束时清理；不解析凭据、不创建 Session 或数据库用户。
 
-用户 CRUD 不执行身份或权限校验；文件入口校验身份及所有者。后台内容处理必须显式传用户 ID，并由调用方关闭返回流。跨模块文件合同集中在 `application.file.content`。
+用户 CRUD 不执行身份或权限校验；文件入口和全部 12 个知识库 HTTP 接口均通过 `LoginUserContext` 校验服务端请求身份，关闭模拟身份后返回 401。源文件所有权仅在文档登记与同步构建时校验调用者归属；知识库、文档、版本和切片正文查询对任何已绑定身份开放。这属于当前学习工程边界，系统尚未建立知识库多租户或访问控制模型，不声称已授权。后台内容处理必须显式传用户 ID，并由调用方关闭返回流。跨模块文件合同集中在 `application.file.content`。
 
 `application.user.reference.UserReferenceService` 仅回答用户是否存在。模拟模式只接受配置 ID；关闭模拟后查询未删除用户，不按账户状态过滤。该能力不承担认证或权限判断，文件服务不通过它校验所有者。详细规则见 [用户模块](../modules/user.md) 和 [文件模块](../modules/file.md)。
 
 ## 公共错误与请求标识
 
-[GlobalExceptionHandler](../../src/main/java/com/item/aisummary/web/error/GlobalExceptionHandler.java) 统一生成 ProblemDetail。[RequestIdFilter](../../src/main/java/com/item/aisummary/infrastructure/web/RequestIdFilter.java) 接受合法的 `X-Request-Id` 或生成 UUID，并通过响应头返回。
+[GlobalExceptionHandler](../../src/main/java/com/item/aisummary/web/error/GlobalExceptionHandler.java) 统一生成 ProblemDetail。针对知识库操作，它集中映射了业务冲突（409 `exception.code`）、构建能力不可用（503 `KNOWLEDGE_RAG_DISABLED`、`KNOWLEDGE_PARSER_UNAVAILABLE`、`KNOWLEDGE_CHUNKER_UNAVAILABLE`）以及构建阶段异常（读取/向量 502、解析/切分 422、持久化/发布 500，detail 固定为阶段脱敏摘要并携带 `stage` 与 `cleanupCompleted` 扩展属性，发布失败向量保留待核对不能说回滚）。[RequestIdFilter](../../src/main/java/com/item/aisummary/infrastructure/web/RequestIdFilter.java) 接受合法的 `X-Request-Id` 或生成 UUID，并通过响应头返回。
 
-请求标识仅用于关联请求。HTTP 响应字段和错误码集中维护在 [HTTP API](./api.md#错误响应)，不在架构文档重复列出。
+请求标识仅用于关联请求。公开 HTTP 接口清单、响应字段和错误码集中维护在 [HTTP API](./api.md)，不在架构文档重复列出。
 
 ## 持久化与时间
 
@@ -67,4 +67,4 @@ flowchart LR
 
 运行配置与开关见 [配置说明](./configuration.md)。模型、对象存储和 RAG 默认关闭；RAG 开启时要求生产解析器、FLAT 分块器、OpenAI Embedding 与 Qdrant，缺少后端或配套 Bean 拒绝启动。TXT/Markdown/DOCX 本地解析不访问外网；PDF 云解析需另行显式开启 DocMind，处理时会上传文件并可能产生费用。
 
-当前没有真实登录、知识库 HTTP、权限、异步任务、检索或问答。普通测试使用 H2、真实本地解析/切分与外部替身；外部服务和真实云调用尚未验收。测试命令见 [项目 README](../../README.md#验证)。
+知识库现已提供 12 个公开 HTTP 接口（覆盖知识库创建/查询/改名、文档登记与查询、文档同步构建、版本与切片只读查询；详见 [HTTP API](./api.md#知识库接口)）。当前没有真实登录认证系统、知识库独立权限控制、删除接口、异步任务队列、向量检索或问答。普通测试使用 H2、真实本地解析/切分与外部替身；外部服务和真实云调用尚未验收。测试命令见 [项目 README](../../README.md#验证)。

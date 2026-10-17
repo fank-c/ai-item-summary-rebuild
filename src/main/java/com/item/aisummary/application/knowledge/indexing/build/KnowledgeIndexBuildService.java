@@ -107,7 +107,7 @@ public class KnowledgeIndexBuildService {
      * @return 构建发布结果
      * @throws AuthenticationRequiredException 缺少调用者身份
      * @throws KnowledgeNotFoundException 文档不存在
-     * @throws IllegalStateException 缺少对应格式解析策略或分块策略
+     * @throws KnowledgeBuildUnavailableException 缺少对应格式解析策略或分块策略
      * @throws KnowledgeBuildException 构建各阶段发生错误
      */
     @Transactional(propagation = Propagation.NEVER)

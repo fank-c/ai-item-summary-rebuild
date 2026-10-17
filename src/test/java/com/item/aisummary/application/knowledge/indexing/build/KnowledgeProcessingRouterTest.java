@@ -8,7 +8,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
-import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -19,7 +19,7 @@ import static org.mockito.Mockito.when;
  * 策略路由注册表（KnowledgeProcessingRouter）单元测试。
  *
  * <p>验证解析格式（FileFormat）与分块模式（ChunkingMode）的独立策略路由查找、
- * 杜绝重复注册与模糊选择、以及未注册时抛出显式状态异常。
+ * 杜绝重复注册与模糊选择、以及未注册时提供可由 HTTP 边界识别的能力不可用编码。
  */
 class KnowledgeProcessingRouterTest {
     @Test void selectsParserAndChunkerIndependentlyAndDoesNotInvokeAlgorithms() {
@@ -47,8 +47,12 @@ class KnowledgeProcessingRouterTest {
         var router = new KnowledgeProcessingRouter(List.of(), List.of());
         assertThat(router.hasParsers()).isFalse();
         assertThat(router.hasChunkers()).isFalse();
-        assertThatIllegalStateException().isThrownBy(() -> router.requireParser(FileFormat.PDF));
-        assertThatIllegalStateException().isThrownBy(() -> router.requireChunker(ChunkingMode.PARENT_CHILD));
+        assertThatThrownBy(() -> router.requireParser(FileFormat.PDF))
+                .isInstanceOf(KnowledgeBuildUnavailableException.class)
+                .extracting("code").isEqualTo("KNOWLEDGE_PARSER_UNAVAILABLE");
+        assertThatThrownBy(() -> router.requireChunker(ChunkingMode.PARENT_CHILD))
+                .isInstanceOf(KnowledgeBuildUnavailableException.class)
+                .extracting("code").isEqualTo("KNOWLEDGE_CHUNKER_UNAVAILABLE");
     }
 
     private static KnowledgeDocumentParser parser(FileFormat format) {
